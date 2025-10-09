@@ -281,7 +281,7 @@ async function showMainMenu(chatId, telegramId) {
 👋 <b>Привіт, ${user?.fullName || 'колега'}!</b>`;
 
     const baseKeyboard = [
-      // Основні робочі функції
+      // Основні робочі функції (найважливіші)
       [
         { text: '🏖️ Відпустки', callback_data: 'vacation_menu' },
         { text: '🏠 Remote', callback_data: 'remote_menu' }
@@ -295,14 +295,15 @@ async function showMainMenu(chatId, telegramId) {
         { text: '📊 Моя статистика', callback_data: 'my_stats' },
         { text: '🎯 Онбординг', callback_data: 'onboarding_menu' }
       ],
-      [
-        { text: '💬 Пропозиції', callback_data: 'suggestions_menu' },
-        { text: '🚨 ASAP запит', callback_data: 'asap_request' }
-      ],
       // Довідка та допомога
       [
         { text: '❓ FAQ', callback_data: 'faq_menu' },
         { text: '🤖 ШІ-Помічник', callback_data: 'ai_assistant' }
+      ],
+      // Менше використовувані функції
+      [
+        { text: '💬 Пропозиції', callback_data: 'suggestions_menu' },
+        { text: '🚨 ASAP запит', callback_data: 'asap_request' }
       ]
     ];
 
@@ -326,10 +327,7 @@ async function showMainMenu(chatId, telegramId) {
       ]);
     }
 
-    // Кнопка оновлення внизу (як у зображенні)
-    baseKeyboard.push([
-      { text: '🔄 Оновити меню', callback_data: 'main_menu' }
-    ]);
+    // Кнопка оновлення прибрана за запитом користувача
 
     await sendMessage(chatId, welcomeText, { inline_keyboard: baseKeyboard });
   } catch (error) {
