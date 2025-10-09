@@ -316,10 +316,6 @@ async function showMainMenu(chatId, telegramId) {
       [
         { text: '💬 Пропозиції' },
         { text: '🚨 ASAP запит' }
-      ],
-      // Кнопка меню (як у зображенні)
-      [
-        { text: '🍪 Меню' }
       ]
     ];
 
@@ -909,8 +905,7 @@ async function handleReplyKeyboard(chatId, telegramId, text) {
       '📈 Аналітика': showAnalyticsMenu,
       '👥 HR Панель': showHRPanel,
       '📢 Розсилки': () => sendMessage(chatId, '📢 Розсилки в розробці'),
-      '🏢 CEO Панель': showCEOPanel,
-      '🍪 Меню': showMainMenu
+      '🏢 CEO Панель': showCEOPanel
     };
     
     if (routes[text]) {
