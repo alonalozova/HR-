@@ -1,0 +1,22 @@
+{
+  "name": "hr-bot-commercial",
+  "version": "1.0.0",
+  "description": "Комерційний HR бот для автоматизації HR процесів",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["telegram", "bot", "hr", "automation"],
+  "author": "Люди.Digital",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "google-spreadsheet": "^4.1.2",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
