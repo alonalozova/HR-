@@ -112,6 +112,11 @@ async function processMessage(message) {
       return;
     }
     
+    // Обробка Reply Keyboard кнопок
+    if (await handleReplyKeyboard(chatId, telegramId, text)) {
+      return;
+    }
+    
     await handleRegistrationInput(chatId, telegramId, text);
   } catch (error) {
     console.error('Помилка processMessage:', error);
@@ -166,7 +171,13 @@ async function processCallback(callback) {
 async function sendMessage(chatId, text, keyboard = null) {
   try {
     const options = { parse_mode: 'HTML' };
-    if (keyboard) options.reply_markup = keyboard;
+    if (keyboard) {
+      if (keyboard.inline_keyboard) {
+        options.reply_markup = keyboard; // Inline keyboard
+      } else {
+        options.reply_markup = { keyboard: keyboard, resize_keyboard: true }; // Reply keyboard
+      }
+    }
     await bot.sendMessage(chatId, text, options);
   } catch (error) {
     console.error('Помилка sendMessage:', error);
@@ -280,56 +291,61 @@ async function showMainMenu(chatId, telegramId) {
 
 👋 <b>Привіт, ${user?.fullName || 'колега'}!</b>`;
 
+    // Reply Keyboard (постійна клавіатура внизу)
     const baseKeyboard = [
       // Основні робочі функції (найважливіші)
       [
-        { text: '🏖️ Відпустки', callback_data: 'vacation_menu' },
-        { text: '🏠 Remote', callback_data: 'remote_menu' }
+        { text: '🏖️ Відпустки' },
+        { text: '🏠 Remote' }
       ],
       [
-        { text: '⏰ Спізнення', callback_data: 'late_menu' },
-        { text: '🏥 Лікарняний', callback_data: 'sick_menu' }
+        { text: '⏰ Спізнення' },
+        { text: '🏥 Лікарняний' }
       ],
       // Додаткові функції
       [
-        { text: '📊 Моя статистика', callback_data: 'my_stats' },
-        { text: '🎯 Онбординг', callback_data: 'onboarding_menu' }
+        { text: '📊 Статистика' },
+        { text: '🎯 Онбординг' }
       ],
       // Довідка та допомога
       [
-        { text: '❓ FAQ', callback_data: 'faq_menu' },
-        { text: '🤖 ШІ-Помічник', callback_data: 'ai_assistant' }
+        { text: '❓ FAQ' },
+        { text: '🤖 ШІ-Помічник' }
       ],
       // Менше використовувані функції
       [
-        { text: '💬 Пропозиції', callback_data: 'suggestions_menu' },
-        { text: '🚨 ASAP запит', callback_data: 'asap_request' }
+        { text: '💬 Пропозиції' },
+        { text: '🚨 ASAP запит' }
+      ],
+      // Кнопка меню (як у зображенні)
+      [
+        { text: '🍪 Меню' }
       ]
     ];
 
     if (role === 'PM' || role === 'HR' || role === 'CEO') {
       baseKeyboard.push([
-        { text: '📋 Затвердження', callback_data: 'approvals_menu' },
-        { text: '📈 Аналітика', callback_data: 'analytics_menu' }
+        { text: '📋 Затвердження' },
+        { text: '📈 Аналітика' }
       ]);
     }
 
     if (role === 'HR') {
       baseKeyboard.push([
-        { text: '👥 HR Панель', callback_data: 'hr_panel' },
-        { text: '📢 Розсилки', callback_data: 'hr_broadcasts' }
+        { text: '👥 HR Панель' },
+        { text: '📢 Розсилки' }
       ]);
     }
 
     if (role === 'CEO') {
       baseKeyboard.push([
-        { text: '🏢 CEO Панель', callback_data: 'ceo_panel' }
+        { text: '🏢 CEO Панель' }
       ]);
     }
 
     // Кнопка оновлення прибрана за запитом користувача
 
-    await sendMessage(chatId, welcomeText, { inline_keyboard: baseKeyboard });
+    await sendMessage(chatId, welcomeText, baseKeyboard);
   } catch (error) {
     console.error('Помилка showMainMenu:', error);
     await sendMessage(chatId, '❌ Помилка завантаження меню.');
@@ -873,6 +889,40 @@ async function showAISickHelp(chatId, telegramId) {
 
 async function showAIPersonalTips(chatId, telegramId) {
   await sendMessage(chatId, '💡 ШІ персональні поради завантажуються...');
+}
+
+// 🎛️ ОБРОБКА REPLY KEYBOARD
+async function handleReplyKeyboard(chatId, telegramId, text) {
+  try {
+    const routes = {
+      '🏖️ Відпустки': showVacationMenu,
+      '🏠 Remote': showRemoteMenu,
+      '⏰ Спізнення': showLateMenu,
+      '🏥 Лікарняний': showSickMenu,
+      '📊 Статистика': showMyStats,
+      '🎯 Онбординг': showOnboardingMenu,
+      '❓ FAQ': showFAQMenu,
+      '🤖 ШІ-Помічник': showAIAssistant,
+      '💬 Пропозиції': showSuggestionsMenu,
+      '🚨 ASAP запит': showASAPForm,
+      '📋 Затвердження': () => sendMessage(chatId, '📋 Затвердження в розробці'),
+      '📈 Аналітика': showAnalyticsMenu,
+      '👥 HR Панель': showHRPanel,
+      '📢 Розсилки': () => sendMessage(chatId, '📢 Розсилки в розробці'),
+      '🏢 CEO Панель': showCEOPanel,
+      '🍪 Меню': showMainMenu
+    };
+    
+    if (routes[text]) {
+      await routes[text](chatId, telegramId);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Помилка handleReplyKeyboard:', error);
+    return false;
+  }
 }
 
 async function handleRegistrationInput(chatId, telegramId, text) {
