@@ -278,9 +278,10 @@ async function showMainMenu(chatId, telegramId) {
 🚨 <b>ASAP:</b> термінові запити до HR
 🤖 <b>ШІ-Помічник:</b> швидкі відповіді та поради
 
-👋 <b>Привіт, ${user?.fullName || 'колега'}!</b> Оберіть потрібну функцію:`;
+👋 <b>Привіт, ${user?.fullName || 'колега'}!</b>`;
 
     const baseKeyboard = [
+      // Основні робочі функції
       [
         { text: '🏖️ Відпустки', callback_data: 'vacation_menu' },
         { text: '🏠 Remote', callback_data: 'remote_menu' }
@@ -289,6 +290,7 @@ async function showMainMenu(chatId, telegramId) {
         { text: '⏰ Спізнення', callback_data: 'late_menu' },
         { text: '🏥 Лікарняний', callback_data: 'sick_menu' }
       ],
+      // Додаткові функції
       [
         { text: '📊 Моя статистика', callback_data: 'my_stats' },
         { text: '🎯 Онбординг', callback_data: 'onboarding_menu' }
@@ -297,6 +299,7 @@ async function showMainMenu(chatId, telegramId) {
         { text: '💬 Пропозиції', callback_data: 'suggestions_menu' },
         { text: '🚨 ASAP запит', callback_data: 'asap_request' }
       ],
+      // Довідка та допомога
       [
         { text: '❓ FAQ', callback_data: 'faq_menu' },
         { text: '🤖 ШІ-Помічник', callback_data: 'ai_assistant' }
@@ -323,6 +326,7 @@ async function showMainMenu(chatId, telegramId) {
       ]);
     }
 
+    // Кнопка оновлення внизу (як у зображенні)
     baseKeyboard.push([
       { text: '🔄 Оновити меню', callback_data: 'main_menu' }
     ]);
