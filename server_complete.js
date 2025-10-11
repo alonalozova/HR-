@@ -16,9 +16,17 @@ const HR_CHAT_ID = process.env.HR_CHAT_ID;
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
-if (!BOT_TOKEN || !SPREADSHEET_ID || !HR_CHAT_ID) {
-  console.error('❌ Відсутні обов\'язкові environment variables!');
+if (!BOT_TOKEN) {
+  console.error('❌ Відсутній BOT_TOKEN!');
   process.exit(1);
+}
+
+// Попередження про відсутні змінні, але не завершуємо сервер
+if (!SPREADSHEET_ID) {
+  console.warn('⚠️ SPREADSHEET_ID не встановлено - Google Sheets недоступні');
+}
+if (!HR_CHAT_ID) {
+  console.warn('⚠️ HR_CHAT_ID не встановлено - деякі функції будуть недоступні');
 }
 
 // 🤖 ІНІЦІАЛІЗАЦІЯ
@@ -37,6 +45,16 @@ const registrationCache = new Map();
 // 📊 ІНІЦІАЛІЗАЦІЯ GOOGLE SHEETS
 async function initGoogleSheets() {
   try {
+    if (!SPREADSHEET_ID) {
+      console.warn('⚠️ SPREADSHEET_ID не встановлено - Google Sheets пропущено');
+      return false;
+    }
+    
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+      console.warn('⚠️ Google Service Account credentials не встановлено - Google Sheets пропущено');
+      return false;
+    }
+    
     const serviceAccountAuth = new JWT({
       email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
       key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
@@ -48,7 +66,8 @@ async function initGoogleSheets() {
     console.log('✅ Google Sheets підключено:', doc.title);
     return true;
   } catch (error) {
-    console.error('❌ Помилка підключення до Google Sheets:', error);
+    console.warn('⚠️ Google Sheets недоступні:', error.message);
+    doc = null; // Встановлюємо doc в null якщо не вдалося підключитися
     return false;
   }
 }
@@ -184,6 +203,11 @@ async function getUserInfo(telegramId) {
       }
     }
     
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено - getUserInfo недоступний');
+      return null;
+    }
+    
     await doc.loadInfo();
     const sheet = doc.sheetsByTitle['Employees'];
     if (!sheet) return null;
@@ -218,6 +242,11 @@ async function getUserInfo(telegramId) {
 // 🔐 ОТРИМАННЯ РОЛІ
 async function getUserRole(telegramId) {
   try {
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено - getUserRole недоступний');
+      return 'EMP'; // Повертаємо стандартну роль
+    }
+    
     await doc.loadInfo();
     const sheet = doc.sheetsByTitle['Roles'];
     if (!sheet) return 'EMP';
