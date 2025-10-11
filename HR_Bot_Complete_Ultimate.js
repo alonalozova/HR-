@@ -9,6 +9,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
+const OpenAI = require('openai');
 
 // ⚙️ НАЛАШТУВАННЯ
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -30,6 +31,17 @@ if (!HR_CHAT_ID) console.warn('⚠️ HR_CHAT_ID не встановлено');
 const bot = new TelegramBot(BOT_TOKEN);
 const app = express();
 let doc;
+
+// 🧠 OpenAI ChatGPT
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+  console.log('✅ OpenAI ChatGPT підключено');
+} else {
+  console.warn('⚠️ OPENAI_API_KEY не встановлено - ChatGPT недоступний');
+}
 
 // 🛡️ ЗАХИСТ ВІД ДУБЛЮВАННЯ
 const processedUpdates = new Set();
@@ -1901,10 +1913,24 @@ async function handleAIQuestion(chatId, telegramId, text) {
     console.log(`🤖 AI Question from ${telegramId}: ${text}`);
     console.log(`🤖 AI Step: ${regData.step}, Type: ${regData.data.type}`);
 
-    // Простий AI на основі ключових слів
-    const response = generateAIResponse(text, regData.data.type);
+    let response;
     
-    console.log(`🤖 AI Response: ${response}`);
+    // Спробуємо ChatGPT API, якщо доступний
+    if (openai) {
+      try {
+        response = await getChatGPTResponse(text, regData.data.type);
+        console.log(`🤖 ChatGPT Response: ${response}`);
+      } catch (error) {
+        console.error('❌ ChatGPT помилка:', error);
+        // Fallback до простої бази знань
+        response = generateAIResponse(text, regData.data.type);
+        console.log(`🤖 Fallback Response: ${response}`);
+      }
+    } else {
+      // Використовуємо просту базу знань
+      response = generateAIResponse(text, regData.data.type);
+      console.log(`🤖 Simple AI Response: ${response}`);
+    }
     
     await sendMessage(chatId, `🤖 <b>ШІ-Помічник відповідає:</b>\n\n${response}`);
     
@@ -1912,7 +1938,8 @@ async function handleAIQuestion(chatId, telegramId, text) {
     await logUserData(telegramId, 'ai_interaction', { 
       type: regData.data.type, 
       question: text, 
-      response: response 
+      response: response,
+      ai_type: openai ? 'chatgpt' : 'simple'
     });
     
     registrationCache.delete(telegramId);
@@ -1923,7 +1950,44 @@ async function handleAIQuestion(chatId, telegramId, text) {
   }
 }
 
-// Генерація AI відповіді
+// ChatGPT API відповідь
+async function getChatGPTResponse(userInput, type) {
+  try {
+    const systemPrompt = `Ти HR помічник української компанії "Люди.Digital". 
+    
+Твоя роль:
+- Надавати корисні поради з HR питань
+- Допомагати з питаннями про відпустки, remote роботу, спізнення, лікарняний
+- Підтримувати співробітників у складних ситуаціях
+- Давати професійні поради щодо кар'єри та роботи
+
+Правила компанії:
+- Робочий режим: Пн-Пт 10:00-18:00
+- Спізнення з 10:21
+- Remote ліміт: 14 днів/місяць
+- Відпустки: мін 1 день, макс 7 днів за раз, 24 дні/рік
+- Процес відпусток: Користувач → PM → HR
+
+Відповідай українською мовою, дружелюбно та професійно. Якщо потрібна додаткова допомога HR, направляй до відповідних розділів бота.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userInput }
+      ],
+      max_tokens: 500,
+      temperature: 0.7
+    });
+
+    return completion.choices[0].message.content;
+  } catch (error) {
+    console.error('❌ ChatGPT API помилка:', error);
+    throw error;
+  }
+}
+
+// Генерація AI відповіді (fallback)
 function generateAIResponse(userInput, type) {
   const input = userInput.toLowerCase();
   
