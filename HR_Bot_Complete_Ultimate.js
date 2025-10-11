@@ -1898,10 +1898,22 @@ async function handleAIQuestion(chatId, telegramId, text) {
       return false;
     }
 
+    console.log(`🤖 AI Question from ${telegramId}: ${text}`);
+    console.log(`🤖 AI Step: ${regData.step}, Type: ${regData.data.type}`);
+
     // Простий AI на основі ключових слів
     const response = generateAIResponse(text, regData.data.type);
     
+    console.log(`🤖 AI Response: ${response}`);
+    
     await sendMessage(chatId, `🤖 <b>ШІ-Помічник відповідає:</b>\n\n${response}`);
+    
+    // Логування AI взаємодії
+    await logUserData(telegramId, 'ai_interaction', { 
+      type: regData.data.type, 
+      question: text, 
+      response: response 
+    });
     
     registrationCache.delete(telegramId);
     return true;
@@ -1937,10 +1949,25 @@ function generateAIResponse(userInput, type) {
       "Для питань до HR використовуйте розділ 'ASAP запит' для термінових питань або 'Пропозиції' для ідей.",
       "HR затверджує всі заявки на відпустки та керує всіма HR процесами."
     ],
+    burnout: [
+      "Вигорання - це серйозна проблема. Рекомендую: 1) Взяти відпустку для відновлення, 2) Обговорити навантаження з PM, 3) Звернутися до HR через ASAP запит для підтримки.",
+      "Якщо відчуваєте вигорання, це сигнал про необхідність змін. Можете анонімно поділитися своїми думками через розділ 'Пропозиції' або терміново звернутися до HR через 'ASAP запит'.",
+      "Вигорання часто пов'язане з перевантаженням. Розгляньте можливість remote роботи або короткострокової відпустки. HR готовий допомогти в цій ситуації."
+    ],
+    stress: [
+      "Стрес на роботі - нормальне явище, але важливо ним керувати. Спробуйте: 1) Планувати день заздалегідь, 2) Робити короткі перерви, 3) Обговорювати проблеми з колегами або PM.",
+      "Якщо стрес стає неконтрольованим, зверніться до HR через ASAP запит. Вони можуть допомогти знайти рішення або надати підтримку."
+    ],
+    motivation: [
+      "Втрата мотивації може бути тимчасовою. Спробуйте: 1) Поставити нові цілі, 2) Обговорити розвиток кар'єри з PM, 3) Взяти участь у нових проектах.",
+      "Мотивація часто повертається після змін в роботі. Можете анонімно поділитися ідеями покращення роботи через розділ 'Пропозиції'."
+    ],
     general: [
       "Використовуйте меню бота для навігації. Всі функції доступні через кнопки.",
       "Якщо у вас є питання, можете завжди звернутися до HR через бот.",
-      "Не забудьте регулярно перевіряти статистику та баланси в розділі 'Статистика'."
+      "Не забудьте регулярно перевіряти статистику та баланси в розділі 'Статистика'.",
+      "Якщо у вас є проблеми або питання, які потребують негайної уваги, використовуйте розділ 'ASAP запит'.",
+      "Ваші ідеї та пропозиції важливі для команди. Діліться ними через розділ 'Пропозиції'."
     ]
   };
   
@@ -1951,6 +1978,11 @@ function generateAIResponse(userInput, type) {
   else if (input.includes('спізнен') || input.includes('запізнен')) topic = 'late';
   else if (input.includes('лікарнян') || input.includes('хворі')) topic = 'sick';
   else if (input.includes('hr') || input.includes('кадр')) topic = 'hr';
+  else if (input.includes('вигоранн') || input.includes('вигорание') || input.includes('burnout')) topic = 'burnout';
+  else if (input.includes('стрес') || input.includes('стресс') || input.includes('напружен')) topic = 'stress';
+  else if (input.includes('мотивац') || input.includes('мотив') || input.includes('втрат')) topic = 'motivation';
+  else if (input.includes('втом') || input.includes('устал') || input.includes('перевантажен')) topic = 'burnout';
+  else if (input.includes('проблем') || input.includes('труднощ') || input.includes('складно')) topic = 'stress';
   
   // Вибір випадкової відповіді
   const topicResponses = responses[topic];
