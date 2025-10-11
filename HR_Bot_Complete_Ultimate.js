@@ -182,6 +182,11 @@ async function processMessage(message) {
       return;
     }
     
+    // Обробка відпусток
+    if (await handleVacationProcess(chatId, telegramId, text)) {
+      return;
+    }
+    
     // Обробка розсилки HR
     if (await handleHRMailing(chatId, telegramId, text)) {
       return;
@@ -1826,7 +1831,264 @@ Target керує CEO прямо.`;
   }
 }
 
-// AI помічник видалено
+// Обробка відпусток
+async function handleVacationProcess(chatId, telegramId, text) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) return false;
+    
+    if (regData.step === 'vacation_start_date') {
+      // Перевіряємо формат дати
+      const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+      const match = text.match(dateRegex);
+      
+      if (!match) {
+        await sendMessage(chatId, '❌ Невірний формат дати. Використовуйте ДД.ММ.РРРР (наприклад: 11.11.2025)');
+        return true;
+      }
+      
+      const day = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const year = parseInt(match[3]);
+      
+      // Перевіряємо валідність дати
+      const startDate = new Date(year, month - 1, day);
+      if (startDate.getDate() !== day || startDate.getMonth() !== month - 1 || startDate.getFullYear() !== year) {
+        await sendMessage(chatId, '❌ Невірна дата. Перевірте правильність введених даних.');
+        return true;
+      }
+      
+      // Перевіряємо, що дата не в минулому
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (startDate < today) {
+        await sendMessage(chatId, '❌ Дата початку відпустки не може бути в минулому.');
+        return true;
+      }
+      
+      // Зберігаємо дату початку і переходимо до кількості днів
+      regData.data.startDate = startDate;
+      regData.step = 'vacation_days';
+      
+      await sendMessage(chatId, `📅 <b>Дата початку:</b> ${text}\n\n📊 <b>Скільки днів відпустки?</b>\n\nВведіть кількість днів (1-7):`);
+      return true;
+    }
+    
+    if (regData.step === 'vacation_days') {
+      const days = parseInt(text);
+      
+      if (isNaN(days) || days < 1 || days > 7) {
+        await sendMessage(chatId, '❌ Кількість днів має бути від 1 до 7.');
+        return true;
+      }
+      
+      // Зберігаємо кількість днів і обробляємо заявку
+      regData.data.days = days;
+      
+      await processVacationRequest(chatId, telegramId, regData.data);
+      registrationCache.delete(telegramId);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('❌ Помилка handleVacationProcess:', error);
+    return false;
+  }
+}
+
+// Обробка заявки на відпустку
+async function processVacationRequest(chatId, telegramId, vacationData) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Помилка: користувач не знайдений. Пройдіть реєстрацію.');
+      return;
+    }
+    
+    const { startDate, days } = vacationData;
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + days - 1);
+    
+    // Перевіряємо перетини з іншими відпустками
+    const conflicts = await checkVacationConflicts(user.department, user.team, startDate, endDate, telegramId);
+    
+    if (conflicts.length > 0) {
+      let conflictMessage = '⚠️ <b>Знайдено перетини з відпустками:</b>\n\n';
+      conflicts.forEach(conflict => {
+        conflictMessage += `👤 ${conflict.fullName} (${conflict.department}/${conflict.team})\n`;
+        conflictMessage += `📅 ${conflict.startDate} - ${conflict.endDate}\n\n`;
+      });
+      conflictMessage += 'Будь ласка, оберіть інші дати.';
+      
+      await sendMessage(chatId, conflictMessage);
+      
+      // Повідомляємо HR про конфлікт
+      await notifyHRAboutConflict(user, conflicts, startDate, endDate);
+      return;
+    }
+    
+    // Перевіряємо баланс відпусток
+    const balance = await getVacationBalance(telegramId);
+    if (balance < days) {
+      await sendMessage(chatId, `❌ Недостатньо днів відпустки. Доступно: ${balance} днів, потрібно: ${days} днів.`);
+      return;
+    }
+    
+    // Зберігаємо заявку в таблицю
+    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days);
+    
+    // Повідомляємо PM
+    await notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days);
+    
+    // Підтвердження користувачу
+    await sendMessage(chatId, `✅ <b>Заявка на відпустку подана!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
+    
+    // Логування
+    await logUserData(telegramId, 'vacation_request', {
+      requestId,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      days,
+      department: user.department,
+      team: user.team
+    });
+    
+  } catch (error) {
+    console.error('❌ Помилка processVacationRequest:', error);
+    await sendMessage(chatId, '❌ Помилка при обробці заявки. Спробуйте пізніше або зверніться до HR.');
+  }
+}
+
+// Перевірка перетинів відпусток
+async function checkVacationConflicts(department, team, startDate, endDate, excludeUserId = null) {
+  try {
+    if (!doc) return [];
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['VacationRequests'];
+    if (!sheet) return [];
+    
+    const rows = await sheet.getRows();
+    const conflicts = [];
+    
+    for (const row of rows) {
+      if (excludeUserId && row.TelegramID === excludeUserId) continue;
+      if (row.Status !== 'approved' && row.Status !== 'pending_pm') continue;
+      if (row.Department !== department || row.Team !== team) continue;
+      
+      const rowStartDate = new Date(row.StartDate);
+      const rowEndDate = new Date(row.EndDate);
+      
+      // Перевіряємо перетин дат
+      if (startDate <= rowEndDate && endDate >= rowStartDate) {
+        conflicts.push({
+          fullName: row.FullName,
+          department: row.Department,
+          team: row.Team,
+          startDate: formatDate(rowStartDate),
+          endDate: formatDate(rowEndDate)
+        });
+      }
+    }
+    
+    return conflicts;
+  } catch (error) {
+    console.error('❌ Помилка checkVacationConflicts:', error);
+    return [];
+  }
+}
+
+// Збереження заявки на відпустку
+async function saveVacationRequest(telegramId, user, startDate, endDate, days) {
+  try {
+    if (!doc) throw new Error('Google Sheets не підключено');
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['VacationRequests'];
+    if (!sheet) {
+      sheet = await doc.addSheet({
+        title: 'VacationRequests',
+        headerValues: [
+          'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'PM',
+          'StartDate', 'EndDate', 'Days', 'Status', 'CreatedAt', 'ApprovedBy', 'ApprovedAt'
+        ]
+      });
+    }
+    
+    const requestId = `VAC_${Date.now()}_${telegramId}`;
+    
+    await sheet.addRow({
+      RequestID: requestId,
+      TelegramID: telegramId,
+      FullName: user.fullName,
+      Department: user.department,
+      Team: user.team,
+      PM: user.pm || 'Не призначено',
+      StartDate: startDate.toISOString().split('T')[0],
+      EndDate: endDate.toISOString().split('T')[0],
+      Days: days,
+      Status: 'pending_pm',
+      CreatedAt: new Date().toISOString(),
+      ApprovedBy: '',
+      ApprovedAt: ''
+    });
+    
+    console.log(`✅ Збережено заявку на відпустку: ${requestId}`);
+    return requestId;
+  } catch (error) {
+    console.error('❌ Помилка saveVacationRequest:', error);
+    throw error;
+  }
+}
+
+// Повідомлення PM про заявку на відпустку
+async function notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days) {
+  try {
+    if (!user.pm || !HR_CHAT_ID) return;
+    
+    const message = `📋 <b>Нова заявка на відпустку</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n🆔 <b>ID заявки:</b> ${requestId}\n\n⏳ <b>Потребує підтвердження PM</b>`;
+    
+    await sendMessage(HR_CHAT_ID, message);
+    
+    // Логування
+    await logUserData(user.telegramId, 'pm_notification', {
+      requestId,
+      pm: user.pm,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      days
+    });
+  } catch (error) {
+    console.error('❌ Помилка notifyPMAboutVacationRequest:', error);
+  }
+}
+
+// Повідомлення HR про конфлікт
+async function notifyHRAboutConflict(user, conflicts, startDate, endDate) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    let message = `⚠️ <b>КОНФЛІКТ ВІДПУСТОК</b>\n\n👤 <b>Співробітник:</b> ${user.fullName} (${user.department}/${user.team})\n📅 <b>Запитувана дата:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n\n🔄 <b>Перетини з:</b>\n`;
+    
+    conflicts.forEach(conflict => {
+      message += `• ${conflict.fullName} (${conflict.department}/${conflict.team}): ${conflict.startDate} - ${conflict.endDate}\n`;
+    });
+    
+    await sendMessage(HR_CHAT_ID, message);
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutConflict:', error);
+  }
+}
+
+// Форматування дати
+function formatDate(date) {
+  return date.toLocaleDateString('uk-UA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  });
+}
 
 // Логування даних користувачів
 async function logUserData(telegramId, action, data = {}) {
