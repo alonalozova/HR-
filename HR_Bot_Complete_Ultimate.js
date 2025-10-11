@@ -1871,7 +1871,7 @@ async function handleVacationProcess(chatId, telegramId, text) {
       regData.data.startDate = startDate;
       regData.step = 'vacation_days';
       
-      await sendMessage(chatId, `📅 <b>Дата початку:</b> ${text}\n\n📊 <b>Скільки днів відпустки?</b>\n\nВведіть кількість днів (1-7):`);
+      await sendMessage(chatId, `📅 <b>Дата початку:</b> ${text}\n\n📊 <b>Вкажіть кількість днів відпустки</b>\n\nВведіть кількість днів (1-7):`);
       return true;
     }
     
@@ -1915,7 +1915,7 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     const conflicts = await checkVacationConflicts(user.department, user.team, startDate, endDate, telegramId);
     
     if (conflicts.length > 0) {
-      let conflictMessage = '⚠️ <b>Знайдено перетини з відпустками:</b>\n\n';
+      let conflictMessage = '⚠️ <b>Упс, твоя відпустка пересікається з Людинкою з твоєї команди:</b>\n\n';
       conflicts.forEach(conflict => {
         conflictMessage += `👤 ${conflict.fullName} (${conflict.department}/${conflict.team})\n`;
         conflictMessage += `📅 ${conflict.startDate} - ${conflict.endDate}\n\n`;
@@ -1946,7 +1946,7 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     await notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days);
     
     // Підтвердження користувачу
-    await sendMessage(chatId, `✅ <b>Заявка на відпустку подана!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
+    await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
     
     // Логування
     await logUserData(telegramId, 'vacation_request', {
