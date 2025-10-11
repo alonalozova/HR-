@@ -155,6 +155,30 @@ async function processCallback(callback) {
       'ai_late_help': showAILateHelp,
       'ai_sick_help': showAISickHelp,
       'ai_personal_tips': showAIPersonalTips,
+      // Нові callback'и
+      'vacation_request': () => sendMessage(chatId, '📝 Подача заявки на відпустку в розробці'),
+      'vacation_calendar': () => sendMessage(chatId, '📅 Календар відпусток в розробці'),
+      'vacation_my_requests': () => sendMessage(chatId, '📋 Ваші заявки на відпустку в розробці'),
+      'vacation_balance_details': () => sendMessage(chatId, '📊 Детальний баланс відпусток в розробці'),
+      'remote_history': () => sendMessage(chatId, '📋 Історія remote роботи в розробці'),
+      'remote_my_stats': () => sendMessage(chatId, '📊 Детальна статистика remote в розробці'),
+      'faq_vacation': () => sendMessage(chatId, '🏖️ FAQ про відпустки в розробці'),
+      'faq_remote': () => sendMessage(chatId, '🏠 FAQ про remote в розробці'),
+      'faq_late': () => sendMessage(chatId, '⏰ FAQ про спізнення в розробці'),
+      'faq_sick': () => sendMessage(chatId, '🏥 FAQ про лікарняний в розробці'),
+      'faq_work': () => sendMessage(chatId, '💼 FAQ про роботу в розробці'),
+      'faq_onboarding': () => sendMessage(chatId, '🎯 FAQ про онбординг в розробці'),
+      'faq_stats': () => sendMessage(chatId, '📊 FAQ про статистику в розробці'),
+      'faq_suggestions': () => sendMessage(chatId, '💬 FAQ про пропозиції в розробці'),
+      'ai_productivity': () => sendMessage(chatId, '📈 Аналіз продуктивності в розробці'),
+      'ai_career': () => sendMessage(chatId, '🎯 Кар\'єрні поради в розробці'),
+      'ai_question': () => sendMessage(chatId, '💬 Задати питання ШІ в розробці'),
+      'company_structure': () => sendMessage(chatId, '🏢 Структура компанії в розробці'),
+      'onboarding_videos': () => sendMessage(chatId, '📹 Відео матеріали в розробці'),
+      'team_structure': () => sendMessage(chatId, '👥 Команда та відділи в розробці'),
+      'contacts': () => sendMessage(chatId, '📞 Контакти в розробці'),
+      'onboarding_checklist': () => sendMessage(chatId, '📋 Чек-лист адаптації в розробці'),
+      'newbie_faq': () => sendMessage(chatId, '❓ FAQ для новачків в розробці'),
     };
     
     if (routes[data]) {
@@ -353,15 +377,27 @@ async function showVacationMenu(chatId, telegramId) {
   try {
     const balance = await getVacationBalance(telegramId);
     const canTake = await canTakeVacation(telegramId);
+    const myRequests = await getMyVacationRequests(telegramId);
     
     let text = `🏖️ <b>Відпустки</b>\n\n`;
     text += `💰 Ваш баланс: ${balance.remaining}/${balance.annual} днів\n`;
+    text += `📊 Використано: ${balance.used} днів\n\n`;
     
     if (!canTake.allowed) {
-      text += `⚠️ ${canTake.reason}\n`;
+      text += `⚠️ ${canTake.reason}\n\n`;
     }
     
-    text += `\nОберіть дію:`;
+    if (myRequests.length > 0) {
+      text += `📋 <b>Ваші заявки:</b>\n`;
+      myRequests.slice(0, 3).forEach(req => {
+        const status = req.status === 'PENDING' ? '⏳' : req.status === 'APPROVED' ? '✅' : '❌';
+        text += `${status} ${req.startDate} - ${req.endDate} (${req.days} днів)\n`;
+      });
+      if (myRequests.length > 3) text += `... та ще ${myRequests.length - 3} заявок\n`;
+      text += `\n`;
+    }
+    
+    text += `Оберіть дію:`;
 
     const keyboard = {
       inline_keyboard: [
@@ -371,7 +407,10 @@ async function showVacationMenu(chatId, telegramId) {
         ],
         [
           { text: '📋 Мої заявки', callback_data: 'vacation_my_requests' },
-          { text: '📊 Баланс деталі', callback_data: 'vacation_balance_details' }
+          { text: '📅 Календар', callback_data: 'vacation_calendar' }
+        ],
+        [
+          { text: '📊 Детальний баланс', callback_data: 'vacation_balance_details' }
         ],
         [
           { text: '🔙 Назад', callback_data: 'back_main' }
@@ -449,11 +488,36 @@ async function canTakeVacation(telegramId) {
   }
 }
 
+// 📋 ОТРИМАННЯ ЗАЯВОК КОРИСТУВАЧА
+async function getMyVacationRequests(telegramId) {
+  try {
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['VacationRequests'];
+    if (!sheet) return [];
+    
+    const rows = await sheet.getRows();
+    const userRequests = rows.filter(row => row.get('TelegramID') == telegramId);
+    
+    return userRequests.map(row => ({
+      id: row.get('RequestID'),
+      startDate: row.get('StartDate'),
+      endDate: row.get('EndDate'),
+      days: row.get('Days'),
+      status: row.get('Status'),
+      createdAt: row.get('CreatedAt')
+    })).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  } catch (error) {
+    console.error('Помилка getMyVacationRequests:', error);
+    return [];
+  }
+}
+
 // 🏠 МЕНЮ REMOTE
 async function showRemoteMenu(chatId, telegramId) {
   try {
     const user = await getUserInfo(telegramId);
     const monthStats = await getMonthRemoteStats(telegramId);
+    const recentRemotes = await getRecentRemoteDays(telegramId);
     
     let text = `🏠 <b>Remote робота</b>\n\n`;
     text += `👤 ${user?.fullName}\n`;
@@ -461,12 +525,23 @@ async function showRemoteMenu(chatId, telegramId) {
     text += `📊 Цього місяця: ${monthStats.count}/14 днів\n\n`;
     
     if (user?.workFormat === 'Онлайн') {
-      text += `✅ Ви працюєте онлайн - remote без обмежень\n`;
+      text += `✅ Ви працюєте онлайн - remote без обмежень\n\n`;
     } else if (monthStats.count >= 14) {
-      text += `⚠️ Ліміт remote днів вичерпано (14/міс)\n`;
+      text += `⚠️ Ліміт remote днів вичерпано (14/міс)\n\n`;
+    } else {
+      const remaining = 14 - monthStats.count;
+      text += `📈 Залишилось: ${remaining} днів цього місяця\n\n`;
     }
     
-    text += `\nОберіть дію:`;
+    if (recentRemotes.length > 0) {
+      text += `📅 <b>Останні remote дні:</b>\n`;
+      recentRemotes.slice(0, 5).forEach(day => {
+        text += `• ${day.date} (${day.status})\n`;
+      });
+      text += `\n`;
+    }
+    
+    text += `Оберіть дію:`;
 
     const canRequestRemote = user?.workFormat === 'Онлайн' || monthStats.count < 14;
 
@@ -477,7 +552,8 @@ async function showRemoteMenu(chatId, telegramId) {
           { text: '📆 Remote на дату', callback_data: canRequestRemote ? 'remote_date' : 'remote_limit_reached' }
         ],
         [
-          { text: '📊 Моя статистика', callback_data: 'remote_my_stats' }
+          { text: '📊 Детальна статистика', callback_data: 'remote_my_stats' },
+          { text: '📋 Історія remote', callback_data: 'remote_history' }
         ],
         [
           { text: '🔙 Назад', callback_data: 'back_main' }
@@ -513,6 +589,29 @@ async function getMonthRemoteStats(telegramId) {
   } catch (error) {
     console.error('Помилка getMonthRemoteStats:', error);
     return { count: 0 };
+  }
+}
+
+// 📅 ОСТАННІ REMOTE ДНІ
+async function getRecentRemoteDays(telegramId) {
+  try {
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Remotes'];
+    if (!sheet) return [];
+    
+    const rows = await sheet.getRows();
+    const userRemotes = rows.filter(row => row.get('TelegramID') == telegramId);
+    
+    return userRemotes
+      .map(row => ({
+        date: row.get('Date'),
+        status: row.get('Status') || 'Зафіксовано'
+      }))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 10);
+  } catch (error) {
+    console.error('Помилка getRecentRemoteDays:', error);
+    return [];
   }
 }
 
@@ -655,55 +754,105 @@ async function showMyStats(chatId, telegramId) {
 
 // ДОДАТКОВІ МЕНЮ (продовжую далі...)
 async function showOnboardingMenu(chatId, telegramId) {
-  const text = `🎯 <b>Онбординг та навчання</b>
+  try {
+    const user = await getUserInfo(telegramId);
+    const isNewEmployee = await checkIfNewEmployee(telegramId);
+    
+    let text = `🎯 <b>Онбординг та навчання</b>
 
-📚 Матеріали для адаптації:
-• Notion файл з інформацією
-• Відео привітання CEO
-• Структура компанії
+👋 Привіт, ${user?.fullName || 'колега'}!`;
 
-Оберіть розділ:`;
+    if (isNewEmployee) {
+      text += `\n\n🎉 <b>Вітаємо в команді Люди.Digital!</b>\n\n`;
+      text += `📚 <b>Матеріали для адаптації:</b>\n`;
+      text += `• Детальна інформація про компанію\n`;
+      text += `• Структура команди та відділів\n`;
+      text += `• Процеси та процедури\n`;
+      text += `• Контакти та комунікації\n\n`;
+      text += `🎯 <b>Рекомендуємо почати з:</b>\n`;
+      text += `1️⃣ Ознайомлення з Notion матеріалами\n`;
+      text += `2️⃣ Перегляд відео привітання\n`;
+      text += `3️⃣ Вивчення структури компанії\n`;
+    } else {
+      text += `\n\n📚 <b>Матеріали для повторення:</b>\n`;
+      text += `• Оновлення процедур\n`;
+      text += `• Нові матеріали\n`;
+      text += `• Структурні зміни\n`;
+    }
+    
+    text += `\nОберіть розділ:`;
 
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '📖 Notion матеріали', url: 'https://superficial-sort-084.notion.site/3b5c00ad8a42473bbef49bb26f076ebd' }
-      ],
-      [
-        { text: '🏢 Структура компанії', callback_data: 'company_structure' },
-        { text: '📹 Відео матеріали', callback_data: 'onboarding_videos' }
-      ],
-      [
-        { text: '🔙 Назад', callback_data: 'back_main' }
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📖 Notion матеріали', url: 'https://superficial-sort-084.notion.site/3b5c00ad8a42473bbef49bb26f076ebd' }
+        ],
+        [
+          { text: '🏢 Структура компанії', callback_data: 'company_structure' },
+          { text: '📹 Відео матеріали', callback_data: 'onboarding_videos' }
+        ],
+        [
+          { text: '👥 Команда та відділи', callback_data: 'team_structure' },
+          { text: '📞 Контакти', callback_data: 'contacts' }
+        ],
+        [
+          { text: '📋 Чек-лист адаптації', callback_data: 'onboarding_checklist' },
+          { text: '❓ FAQ для новачків', callback_data: 'newbie_faq' }
+        ],
+        [
+          { text: '🔙 Назад', callback_data: 'back_main' }
+        ]
       ]
-    ]
-  };
+    };
 
-  await sendMessage(chatId, text, keyboard);
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('Помилка showOnboardingMenu:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження онбордингу.');
+  }
 }
 
 async function showFAQMenu(chatId, telegramId) {
-  const text = `❓ <b>FAQ - Часті питання</b>
+  try {
+    const user = await getUserInfo(telegramId);
+    
+    let text = `❓ <b>FAQ - Часті питання</b>
+
+👋 Привіт, ${user?.fullName || 'колега'}!
+
+Тут зібрані відповіді на найчастіші питання щодо HR процесів.
 
 Оберіть категорію:`;
 
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '🏖️ Про відпустки', callback_data: 'faq_vacation' },
-        { text: '🏠 Про remote', callback_data: 'faq_remote' }
-      ],
-      [
-        { text: '⏰ Про спізнення', callback_data: 'faq_late' },
-        { text: '🏥 Про лікарняний', callback_data: 'faq_sick' }
-      ],
-      [
-        { text: '🔙 Назад', callback_data: 'back_main' }
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '🏖️ Про відпустки', callback_data: 'faq_vacation' },
+          { text: '🏠 Про remote', callback_data: 'faq_remote' }
+        ],
+        [
+          { text: '⏰ Про спізнення', callback_data: 'faq_late' },
+          { text: '🏥 Про лікарняний', callback_data: 'faq_sick' }
+        ],
+        [
+          { text: '💼 Про роботу', callback_data: 'faq_work' },
+          { text: '🎯 Про онбординг', callback_data: 'faq_onboarding' }
+        ],
+        [
+          { text: '📊 Про статистику', callback_data: 'faq_stats' },
+          { text: '💬 Про пропозиції', callback_data: 'faq_suggestions' }
+        ],
+        [
+          { text: '🔙 Назад', callback_data: 'back_main' }
+        ]
       ]
-    ]
-  };
+    };
 
-  await sendMessage(chatId, text, keyboard);
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('Помилка showFAQMenu:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження FAQ.');
+  }
 }
 
 async function showRegistrationForm(chatId, telegramId) {
@@ -776,43 +925,64 @@ async function showASAPForm(chatId, telegramId) {
 }
 
 async function showAIAssistant(chatId, telegramId) {
-  const text = `🤖 <b>ШІ-Помічник</b>
+  try {
+    const user = await getUserInfo(telegramId);
+    const balance = await getVacationBalance(telegramId);
+    const remoteStats = await getMonthRemoteStats(telegramId);
+    const lateStats = await getMonthLateStats(telegramId);
+    
+    let text = `🤖 <b>ШІ-Помічник</b>
 
-Я можу допомогти вам з:
+👋 Привіт, ${user?.fullName || 'колега'}!
+
+Я ваш персональний HR асистент і можу допомогти з:
 
 🔍 <b>Швидкі відповіді:</b>
-• Правила відпусток
-• Процедури remote роботи
-• Політика спізнень
-• Лікарняні процедури
+• Правила відпусток та remote роботи
+• Політика спізнень та лікарняних
+• Процедури затвердження
 
-💡 <b>Рекомендації:</b>
-• Оптимальні дати відпустки
-• Планування робочого графіку
-• Поради по кар'єрі
+💡 <b>Персональні поради:</b>
+• Оптимальне планування відпусток
+• Рекомендації по робочому графіку
+• Поради по кар'єрному розвитку
 
-❓ Задайте мені будь-яке питання!`;
+📊 <b>Ваша поточна статистика:</b>
+• Відпустки: ${balance.remaining}/${balance.annual} днів
+• Remote цього місяця: ${remoteStats.count} днів
+• Спізнення цього місяця: ${lateStats.count} разів
 
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '❓ Про відпустки', callback_data: 'ai_vacation_help' },
-        { text: '🏠 Про remote', callback_data: 'ai_remote_help' }
-      ],
-      [
-        { text: '⏰ Про спізнення', callback_data: 'ai_late_help' },
-        { text: '🏥 Про лікарняний', callback_data: 'ai_sick_help' }
-      ],
-      [
-        { text: '💡 Персональні поради', callback_data: 'ai_personal_tips' }
-      ],
-      [
-        { text: '🔙 Назад', callback_data: 'back_main' }
+❓ Оберіть тему або задайте питання:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '🏖️ Поради по відпусткам', callback_data: 'ai_vacation_help' },
+          { text: '🏠 Поради по remote', callback_data: 'ai_remote_help' }
+        ],
+        [
+          { text: '⏰ Поради по спізненням', callback_data: 'ai_late_help' },
+          { text: '🏥 Поради по лікарняному', callback_data: 'ai_sick_help' }
+        ],
+        [
+          { text: '💡 Персональні рекомендації', callback_data: 'ai_personal_tips' },
+          { text: '📈 Аналіз продуктивності', callback_data: 'ai_productivity' }
+        ],
+        [
+          { text: '🎯 Кар'єрні поради', callback_data: 'ai_career' },
+          { text: '💬 Задати питання', callback_data: 'ai_question' }
+        ],
+        [
+          { text: '🔙 Назад', callback_data: 'back_main' }
+        ]
       ]
-    ]
-  };
+    };
 
-  await sendMessage(chatId, text, keyboard);
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('Помилка showAIAssistant:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження ШІ-помічника.');
+  }
 }
 
 async function showAnalyticsMenu(chatId, telegramId) {
@@ -916,6 +1086,23 @@ async function handleReplyKeyboard(chatId, telegramId, text) {
     return false;
   } catch (error) {
     console.error('Помилка handleReplyKeyboard:', error);
+    return false;
+  }
+}
+
+// 🆕 ПЕРЕВІРКА НОВИХ СПІВРОБІТНИКІВ
+async function checkIfNewEmployee(telegramId) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user?.startDate) return false;
+    
+    const startDate = new Date(user.startDate);
+    const now = new Date();
+    const daysSinceStart = Math.ceil((now - startDate) / (1000 * 60 * 60 * 24));
+    
+    return daysSinceStart <= 30; // Вважаємо новим протягом першого місяця
+  } catch (error) {
+    console.error('Помилка checkIfNewEmployee:', error);
     return false;
   }
 }
