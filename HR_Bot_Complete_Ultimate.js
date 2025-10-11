@@ -187,10 +187,7 @@ async function processMessage(message) {
       return;
     }
     
-    // Обробка AI питань
-    if (await handleAIQuestion(chatId, telegramId, text)) {
-      return;
-    }
+    // AI помічник видалено
     
     await sendMessage(chatId, '❓ Оберіть дію з меню нижче.');
     
@@ -233,8 +230,7 @@ async function processCallback(callbackQuery) {
       'suggestions_view': () => showMySuggestions(chatId, telegramId),
       'asap_form': () => showASAPForm(chatId, telegramId),
       'faq_category': () => showFAQCategory(chatId, telegramId),
-      'ai_question': () => showAIQuestion(chatId, telegramId),
-      'ai_advice': () => showAIAdvice(chatId, telegramId),
+      // AI помічник видалено
       'approvals_vacations': () => showApprovalVacations(chatId, telegramId),
       'approvals_remote': () => showApprovalRemote(chatId, telegramId),
       'analytics_hr': () => showHRAnalytics(chatId, telegramId),
@@ -249,8 +245,7 @@ async function processCallback(callbackQuery) {
       'onboarding_quiz': () => showOnboardingQuiz(chatId, telegramId),
       'onboarding_rules': () => showCompanyRules(chatId, telegramId),
       'onboarding_structure': () => showTeamStructure(chatId, telegramId),
-      'ai_question': () => startAIQuestion(chatId, telegramId),
-      'ai_advice': () => startAIAdvice(chatId, telegramId),
+      // AI помічник видалено
       'back_to_main': () => showMainMenu(chatId, telegramId)
     };
     
@@ -379,7 +374,6 @@ async function showMainMenu(chatId, telegramId) {
 🎯 <b>Онбординг:</b> матеріали для нових співробітників
 💬 <b>Пропозиції:</b> анонімні та іменні ідеї
 🚨 <b>ASAP:</b> термінові запити до HR
-🤖 <b>ШІ-Помічник:</b> швидкі відповіді та поради
 
 👋 <b>Привіт, ${user?.fullName || 'колега'}!</b>`;
 
@@ -402,7 +396,6 @@ async function showMainMenu(chatId, telegramId) {
       // Довідка та допомога
       [
         { text: '❓ FAQ' },
-        { text: '🤖 ШІ-Помічник' }
       ],
       // Менше використовувані функції
       [
@@ -452,7 +445,6 @@ async function handleReplyKeyboard(chatId, telegramId, text) {
       '📊 Статистика': showStatsMenu,
       '🎯 Онбординг': showOnboardingMenu,
       '❓ FAQ': showFAQMenu,
-      '🤖 ШІ-Помічник': showAIMenu,
       '💬 Пропозиції': showSuggestionsMenu,
       '🚨 ASAP запит': showASAPMenu,
       '📋 Затвердження': showApprovalsMenu,
@@ -493,7 +485,6 @@ async function showWelcomeMessage(chatId, telegramId, username, firstName, lastN
 🎯 <b>Онбординг:</b> матеріали для нових співробітників
 💬 <b>Пропозиції:</b> анонімні та іменні ідеї
 🚨 <b>ASAP:</b> термінові запити до HR
-🤖 <b>ШІ-Помічник:</b> швидкі відповіді та поради
 
 Натисніть кнопку нижче, щоб почати реєстрацію!`;
 
@@ -701,7 +692,6 @@ async function completeRegistration(chatId, telegramId, data) {
 🎯 <b>Онбордингом</b> - матеріали для нових
 💬 <b>Пропозиціями</b> - ідеї для покращення
 🚨 <b>ASAP запитами</b> - термінові питання
-🤖 <b>ШІ-помічником</b> - швидкі відповіді
 
 Оберіть потрібну функцію з меню нижче!`;
 
@@ -1030,34 +1020,7 @@ async function showFAQMenu(chatId, telegramId) {
   }
 }
 
-// 🤖 МЕНЮ ШІ-ПОМІЧНИКА
-async function showAIMenu(chatId, telegramId) {
-  try {
-    const text = `🤖 <b>ШІ-Помічник</b>
-
-Я можу допомогти вам з швидкими відповідями та порадами.
-
-Оберіть дію:`;
-
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '❓ Задати питання', callback_data: 'ai_question' }
-        ],
-        [
-          { text: '💡 Отримати пораду', callback_data: 'ai_advice' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
-        ]
-      ]
-    };
-
-    await sendMessage(chatId, text, keyboard);
-  } catch (error) {
-    console.error('❌ Помилка showAIMenu:', error);
-  }
-}
+// AI помічник видалено
 
 // 💬 МЕНЮ ПРОПОЗИЦІЙ
 async function showSuggestionsMenu(chatId, telegramId) {
@@ -1863,154 +1826,7 @@ Target керує CEO прямо.`;
   }
 }
 
-// AI функції
-async function startAIQuestion(chatId, telegramId) {
-  try {
-    registrationCache.set(telegramId, {
-      step: 'ai_question',
-      data: { type: 'question' }
-    });
-
-    await sendMessage(chatId, `🤖 <b>ШІ-Помічник - Питання</b>
-
-Задайте ваше питання, і я надам вам швидку відповідь!`);
-  } catch (error) {
-    console.error('❌ Помилка startAIQuestion:', error);
-  }
-}
-
-async function startAIAdvice(chatId, telegramId) {
-  try {
-    registrationCache.set(telegramId, {
-      step: 'ai_advice',
-      data: { type: 'advice' }
-    });
-
-    await sendMessage(chatId, `🤖 <b>ШІ-Помічник - Порада</b>
-
-Опишіть вашу ситуацію, і я дам вам корисну пораду!`);
-  } catch (error) {
-    console.error('❌ Помилка startAIAdvice:', error);
-  }
-}
-
-// Обробка AI питань
-async function handleAIQuestion(chatId, telegramId, text) {
-  try {
-    const regData = registrationCache.get(telegramId);
-    if (!regData || (regData.step !== 'ai_question' && regData.step !== 'ai_advice')) {
-      return false;
-    }
-
-    console.log(`🤖 AI Question from ${telegramId}: ${text}`);
-    console.log(`🤖 AI Step: ${regData.step}, Type: ${regData.data.type}`);
-
-    // Використовуємо просту базу знань (гарантовано працює)
-    const response = generateAIResponse(text, regData.data.type);
-    console.log(`🤖 AI Response: ${response}`);
-    
-    await sendMessage(chatId, `🤖 <b>ШІ-Помічник відповідає:</b>\n\n${response}`);
-    
-    // Логування AI взаємодії
-    await logUserData(telegramId, 'ai_interaction', { 
-      type: regData.data.type, 
-      question: text, 
-      response: response,
-      ai_type: 'simple'
-    });
-    
-    registrationCache.delete(telegramId);
-    return true;
-  } catch (error) {
-    console.error('❌ Помилка handleAIQuestion:', error);
-    return false;
-  }
-}
-
-// Groq AI функція видалена - використовуємо просту базу знань
-
-// Генерація AI відповіді (fallback)
-function generateAIResponse(userInput, type) {
-  const input = userInput.toLowerCase();
-  console.log(`🤖 AI Input: "${userInput}" -> "${input}"`);
-  
-  // База знань для відповідей
-  const responses = {
-    vacation: [
-      "Для відпустки потрібно подати заявку через бот. Максимум 7 днів за раз, мінімум 1 день. Перевірте, чи немає перетинів з колегами в команді.",
-      "Відпустки затверджуються через процес: Ви → PM → HR. Не забудьте перевірити баланс відпусток в розділі 'Відпустки'."
-    ],
-    remote: [
-      "Для remote роботи натисніть 'Remote' в меню та оберіть потрібну дату. Ліміт: 14 днів на місяць для офлайн/гібрид співробітників.",
-      "Remote робота автоматично затверджується, але не забудьте повідомити до 11:00 ранку."
-    ],
-    late: [
-      "Якщо спізнюєтесь, натисніть 'Спізнення' та повідомте HR та PM. Спізнення рахуються з 10:21.",
-      "7 спізнень на місяць = попередження. Будьте пунктуальними!"
-    ],
-    sick: [
-      "При хворобі натисніть 'Лікарняний' та повідомте HR та PM. Лікарняний без лімітів.",
-      "Лікарняний автоматично затверджується, але обов'язково повідомте HR."
-    ],
-    hr: [
-      "Для питань до HR використовуйте розділ 'ASAP запит' для термінових питань або 'Пропозиції' для ідей.",
-      "HR затверджує всі заявки на відпустки та керує всіма HR процесами."
-    ],
-    burnout: [
-      "🫂 Розумію, що ви відчуваєте вигорання. Це серйозна проблема, але є рішення:\n\n🔴 Негайні кроки:\n• Візьміть кілька днів відпустки для відновлення\n• Обмежте робочі години (не працюйте понаднормово)\n• Поговоріть з PM про зменшення навантаження\n• Зверніться до HR через ASAP запит\n\n🟡 Довгострокові заходи:\n• Перегляньте свої пріоритети\n• Встановіть межі між роботою та особистим часом\n• Розгляньте зміну підходів до роботи\n\nПам'ятайте: вигорання - це не ваша провина, а сигнал про необхідність змін!",
-      "💙 Вигорання - це нормальна реакція на хронічний стрес. Важливо діяти:\n\n1️⃣ Візьміть час для відпочинку\n2️⃣ Обговоріть ситуацію з керівником\n3️⃣ Розгляньте можливість remote роботи\n4️⃣ Зверніться до HR за підтримкою\n\nКомпанія зацікавлена у вашому благополуччі та готова допомогти знайти рішення!",
-      "🌟 Вигорання можна подолати! Ось план дій:\n\n⏰ Короткостроково:\n• Відпустка для відновлення\n• Зменшення навантаження\n• Підтримка від команди\n\n📈 Довгостроково:\n• Зміна підходів до роботи\n• Нові цілі та виклики\n• Розвиток кар'єри\n\nHR готовий обговорити індивідуальний план підтримки!"
-    ],
-    stress: [
-      "Стрес на роботі - нормальне явище, але важливо ним керувати. Спробуйте: 1) Планувати день заздалегідь, 2) Робити короткі перерви, 3) Обговорювати проблеми з колегами або PM.",
-      "Якщо стрес стає неконтрольованим, зверніться до HR через ASAP запит. Вони можуть допомогти знайти рішення або надати підтримку."
-    ],
-    motivation: [
-      "Втрата мотивації може бути тимчасовою. Спробуйте: 1) Поставити нові цілі, 2) Обговорити розвиток кар'єри з PM, 3) Взяти участь у нових проектах.",
-      "Мотивація часто повертається після змін в роботі. Можете анонімно поділитися ідеями покращення роботи через розділ 'Пропозиції'."
-    ],
-    general: [
-      "Використовуйте меню бота для навігації. Всі функції доступні через кнопки.",
-      "Якщо у вас є питання, можете завжди звернутися до HR через бот.",
-      "Не забудьте регулярно перевіряти статистику та баланси в розділі 'Статистика'.",
-      "Якщо у вас є проблеми або питання, які потребують негайної уваги, використовуйте розділ 'ASAP запит'.",
-      "Ваші ідеї та пропозиції важливі для команди. Діліться ними через розділ 'Пропозиції'."
-    ]
-  };
-  
-  // Визначення теми питання
-  let topic = 'general';
-  if (input.includes('відпустк') || input.includes('отпуск')) topic = 'vacation';
-  else if (input.includes('remote') || input.includes('віддален')) topic = 'remote';
-  else if (input.includes('спізнен') || input.includes('запізнен')) topic = 'late';
-  else if (input.includes('лікарнян') || input.includes('хворі')) topic = 'sick';
-  else if (input.includes('hr') || input.includes('кадр')) topic = 'hr';
-  else if (input.includes('вигоранн') || input.includes('вигорание') || input.includes('burnout') || input.includes('вигоріла') || input.includes('вигораю') || input.includes('вигорає') || input.includes('вигорів') || input.includes('вигоріти') || input.includes('вигорають')) topic = 'burnout';
-  else if (input.includes('стрес') || input.includes('стресс') || input.includes('напружен')) topic = 'stress';
-  else if (input.includes('мотивац') || input.includes('мотив') || input.includes('втрат')) topic = 'motivation';
-  else if (input.includes('втом') || input.includes('устал') || input.includes('перевантажен')) topic = 'burnout';
-  else if (input.includes('проблем') || input.includes('труднощ') || input.includes('складно')) topic = 'stress';
-  
-  console.log(`🤖 AI Detected Topic: "${topic}"`);
-  
-  // Вибір випадкової відповіді
-  const topicResponses = responses[topic];
-  if (!topicResponses) {
-    console.log(`🤖 AI Topic not found, using fallback`);
-    // Fallback відповідь для невідомих тем
-    const fallbackResponses = [
-      "Дякую за ваше питання! Я можу допомогти з питаннями про відпустки, remote роботу, спізнення, лікарняний та інші HR питання. Спробуйте переформулювати питання або зверніться до HR через ASAP запит.",
-      "Цікаве питання! Якщо це стосується HR процесів, я можу допомогти. Інакше рекомендую звернутися до HR через розділ 'ASAP запит' для отримання детальної відповіді.",
-      "Я готовий допомогти з HR питаннями! Можете запитати про відпустки, remote роботу, спізнення, лікарняний. Для складніших питань рекомендую звернутися до HR."
-    ];
-    return fallbackResponses[Math.floor(Math.random() * fallbackResponses.length)];
-  }
-  
-  const randomResponse = topicResponses[Math.floor(Math.random() * topicResponses.length)];
-  console.log(`🤖 AI Response: "${randomResponse.substring(0, 100)}..."`);
-  
-  return randomResponse;
-}
+// AI помічник видалено
 
 // Логування даних користувачів
 async function logUserData(telegramId, action, data = {}) {
