@@ -1835,6 +1835,7 @@ Target керує CEO прямо.`;
 async function handleVacationProcess(chatId, telegramId, text) {
   try {
     const regData = registrationCache.get(telegramId);
+    console.log('🔍 handleVacationProcess:', { telegramId, hasRegData: !!regData, step: regData?.step, text });
     if (!regData) return false;
     
     if (regData.step === 'vacation_start_date') {
