@@ -4,7 +4,7 @@
   "description": "Комерційний HR бот для автоматизації HR процесів",
   "main": "server.js",
   "scripts": {
-    "start": "node server_complete.js",
+    "start": "node HR_Bot_Complete_Ultimate.js",
     "dev": "node server.js"
   },
   "keywords": ["telegram", "bot", "hr", "automation"],
