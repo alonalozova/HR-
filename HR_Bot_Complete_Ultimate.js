@@ -9,7 +9,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
-const OpenAI = require('openai');
+const Groq = require('groq-sdk');
 
 // ⚙️ НАЛАШТУВАННЯ
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -32,15 +32,15 @@ const bot = new TelegramBot(BOT_TOKEN);
 const app = express();
 let doc;
 
-// 🧠 OpenAI ChatGPT
-let openai = null;
-if (process.env.OPENAI_API_KEY) {
-  openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+// 🧠 Groq AI (безкоштовний)
+let groq = null;
+if (process.env.GROQ_API_KEY) {
+  groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY,
   });
-  console.log('✅ OpenAI ChatGPT підключено');
+  console.log('✅ Groq AI підключено (безкоштовний)');
 } else {
-  console.warn('⚠️ OPENAI_API_KEY не встановлено - ChatGPT недоступний');
+  console.warn('⚠️ GROQ_API_KEY не встановлено - AI недоступний');
 }
 
 // 🛡️ ЗАХИСТ ВІД ДУБЛЮВАННЯ
@@ -1915,13 +1915,13 @@ async function handleAIQuestion(chatId, telegramId, text) {
 
     let response;
     
-    // Спробуємо ChatGPT API, якщо доступний
-    if (openai) {
+    // Спробуємо Groq AI, якщо доступний
+    if (groq) {
       try {
-        response = await getChatGPTResponse(text, regData.data.type);
-        console.log(`🤖 ChatGPT Response: ${response}`);
+        response = await getGroqAIResponse(text, regData.data.type);
+        console.log(`🤖 Groq AI Response: ${response}`);
       } catch (error) {
-        console.error('❌ ChatGPT помилка:', error);
+        console.error('❌ Groq AI помилка:', error);
         // Fallback до простої бази знань
         response = generateAIResponse(text, regData.data.type);
         console.log(`🤖 Fallback Response: ${response}`);
@@ -1939,7 +1939,7 @@ async function handleAIQuestion(chatId, telegramId, text) {
       type: regData.data.type, 
       question: text, 
       response: response,
-      ai_type: openai ? 'chatgpt' : 'simple'
+      ai_type: groq ? 'groq' : 'simple'
     });
     
     registrationCache.delete(telegramId);
@@ -1950,8 +1950,8 @@ async function handleAIQuestion(chatId, telegramId, text) {
   }
 }
 
-// ChatGPT API відповідь
-async function getChatGPTResponse(userInput, type) {
+// Groq AI відповідь (безкоштовний)
+async function getGroqAIResponse(userInput, type) {
   try {
     const systemPrompt = `Ти HR помічник української компанії "Люди.Digital". 
     
@@ -1970,8 +1970,8 @@ async function getChatGPTResponse(userInput, type) {
 
 Відповідай українською мовою, дружелюбно та професійно. Якщо потрібна додаткова допомога HR, направляй до відповідних розділів бота.`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+    const completion = await groq.chat.completions.create({
+      model: "llama3-8b-8192", // Швидка безкоштовна модель
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userInput }
@@ -1982,7 +1982,7 @@ async function getChatGPTResponse(userInput, type) {
 
     return completion.choices[0].message.content;
   } catch (error) {
-    console.error('❌ ChatGPT API помилка:', error);
+    console.error('❌ Groq AI помилка:', error);
     throw error;
   }
 }
