@@ -1938,6 +1938,9 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     // Зберігаємо заявку в таблицю
     const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days);
     
+    // Оновлюємо баланс відпусток (тільки після затвердження)
+    // await updateVacationBalance(telegramId, user, days);
+    
     // Повідомляємо PM
     await notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days);
     
@@ -2005,10 +2008,10 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days) {
     if (!doc) throw new Error('Google Sheets не підключено');
     
     await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['VacationRequests'];
+    let sheet = doc.sheetsByTitle['Vacations'];
     if (!sheet) {
       sheet = await doc.addSheet({
-        title: 'VacationRequests',
+        title: 'Vacations',
         headerValues: [
           'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'PM',
           'StartDate', 'EndDate', 'Days', 'Status', 'CreatedAt', 'ApprovedBy', 'ApprovedAt'
@@ -2078,6 +2081,114 @@ async function notifyHRAboutConflict(user, conflicts, startDate, endDate) {
     await sendMessage(HR_CHAT_ID, message);
   } catch (error) {
     console.error('❌ Помилка notifyHRAboutConflict:', error);
+  }
+}
+
+// Збереження спізнення
+async function saveLateRecord(telegramId, user, date, reason = '') {
+  try {
+    if (!doc) return;
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['Lates'];
+    if (!sheet) {
+      sheet = await doc.addSheet({
+        title: 'Lates',
+        headerValues: [
+          'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Reason', 'CreatedAt'
+        ]
+      });
+    }
+    
+    await sheet.addRow({
+      TelegramID: telegramId,
+      FullName: user.fullName,
+      Department: user.department,
+      Team: user.team,
+      Date: date.toISOString().split('T')[0],
+      Reason: reason,
+      CreatedAt: new Date().toISOString()
+    });
+    
+    console.log(`✅ Збережено спізнення: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+  } catch (error) {
+    console.error('❌ Помилка saveLateRecord:', error);
+  }
+}
+
+// Збереження remote запису
+async function saveRemoteRecord(telegramId, user, date, type = 'remote') {
+  try {
+    if (!doc) return;
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['Remotes'];
+    if (!sheet) {
+      sheet = await doc.addSheet({
+        title: 'Remotes',
+        headerValues: [
+          'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Type', 'CreatedAt'
+        ]
+      });
+    }
+    
+    await sheet.addRow({
+      TelegramID: telegramId,
+      FullName: user.fullName,
+      Department: user.department,
+      Team: user.team,
+      Date: date.toISOString().split('T')[0],
+      Type: type,
+      CreatedAt: new Date().toISOString()
+    });
+    
+    console.log(`✅ Збережено remote: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+  } catch (error) {
+    console.error('❌ Помилка saveRemoteRecord:', error);
+  }
+}
+
+// Оновлення балансу відпусток
+async function updateVacationBalance(telegramId, user, usedDays) {
+  try {
+    if (!doc) return;
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['VacationBalance'];
+    if (!sheet) {
+      sheet = await doc.addSheet({
+        title: 'VacationBalance',
+        headerValues: [
+          'TelegramID', 'FullName', 'Department', 'Team', 'TotalDays', 'UsedDays', 'AvailableDays', 'LastUpdated'
+        ]
+      });
+    }
+    
+    // Знаходимо існуючий запис або створюємо новий
+    const rows = await sheet.getRows();
+    let existingRow = rows.find(row => row.TelegramID === telegramId.toString());
+    
+    if (existingRow) {
+      existingRow.UsedDays = (parseInt(existingRow.UsedDays) || 0) + usedDays;
+      existingRow.AvailableDays = existingRow.TotalDays - existingRow.UsedDays;
+      existingRow.LastUpdated = new Date().toISOString();
+      await existingRow.save();
+    } else {
+      await sheet.addRow({
+        TelegramID: telegramId,
+        FullName: user.fullName,
+        Department: user.department,
+        Team: user.team,
+        TotalDays: 24,
+        UsedDays: usedDays,
+        AvailableDays: 24 - usedDays,
+        LastUpdated: new Date().toISOString()
+      });
+    }
+    
+    console.log(`✅ Оновлено баланс відпусток: ${user.fullName} - використано ${usedDays} днів`);
+  } catch (error) {
+    console.error('❌ Помилка updateVacationBalance:', error);
   }
 }
 
