@@ -178,6 +178,11 @@ async function processMessage(message) {
       return;
     }
     
+    // Обробка розсилки HR
+    if (await handleHRMailing(chatId, telegramId, text)) {
+      return;
+    }
+    
     await sendMessage(chatId, '❓ Оберіть дію з меню нижче.');
     
   } catch (error) {
@@ -225,6 +230,11 @@ async function processCallback(callbackQuery) {
       'approvals_remote': () => showApprovalRemote(chatId, telegramId),
       'analytics_hr': () => showHRAnalytics(chatId, telegramId),
       'analytics_ceo': () => showCEOAnalytics(chatId, telegramId),
+      'hr_mailings': () => showMailingsMenu(chatId, telegramId),
+      'hr_mailing_all': () => startMailingToAll(chatId, telegramId),
+      'hr_mailing_department': () => startMailingToDepartment(chatId, telegramId),
+      'hr_mailing_team': () => startMailingToTeam(chatId, telegramId),
+      'hr_mailing_role': () => startMailingToRole(chatId, telegramId),
       'back_to_main': () => showMainMenu(chatId, telegramId)
     };
     
@@ -242,6 +252,15 @@ async function processCallback(callbackQuery) {
     } else if (data.startsWith('faq_')) {
       const faqId = data.replace('faq_', '');
       await showFAQAnswer(chatId, telegramId, faqId);
+    } else if (data.startsWith('mailing_dept_')) {
+      const department = data.replace('mailing_dept_', '');
+      await startMailingToDepartmentSelected(chatId, telegramId, department);
+    } else if (data.startsWith('mailing_team_')) {
+      const team = data.replace('mailing_team_', '');
+      await startMailingToTeamSelected(chatId, telegramId, team);
+    } else if (data.startsWith('mailing_role_')) {
+      const role = data.replace('mailing_role_', '');
+      await startMailingToRoleSelected(chatId, telegramId, role);
     }
     
   } catch (error) {
@@ -1188,7 +1207,27 @@ async function showMailingsMenu(chatId, telegramId) {
       return;
     }
 
-    await sendMessage(chatId, '📢 Розсилки в розробці');
+    const text = `📢 <b>Розсилки</b>
+
+Оберіть тип розсилки:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '👥 Всім співробітникам', callback_data: 'hr_mailing_all' },
+          { text: '🏢 По відділу', callback_data: 'hr_mailing_department' }
+        ],
+        [
+          { text: '👥 По команді', callback_data: 'hr_mailing_team' },
+          { text: '👑 По ролі', callback_data: 'hr_mailing_role' }
+        ],
+        [
+          { text: '⬅️ Назад', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showMailingsMenu:', error);
   }
@@ -1306,6 +1345,315 @@ async function getSickStats(telegramId) {
   } catch (error) {
     console.error('❌ Помилка getSickStats:', error);
     return { days: 0, count: 0 };
+  }
+}
+
+// 📢 ФУНКЦІЇ РОЗСИЛКИ HR
+
+// Розсилка всім співробітникам
+async function startMailingToAll(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    // Зберігаємо стан розсилки
+    registrationCache.set(telegramId, {
+      step: 'mailing_message',
+      data: { type: 'all', recipients: 'all' }
+    });
+
+    await sendMessage(chatId, `📢 <b>Розсилка всім співробітникам</b>
+
+Введіть текст повідомлення:`);
+  } catch (error) {
+    console.error('❌ Помилка startMailingToAll:', error);
+  }
+}
+
+// Розсилка по відділу
+async function startMailingToDepartment(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '🏢 Marketing', callback_data: 'mailing_dept_Marketing' },
+          { text: '🎨 Design', callback_data: 'mailing_dept_Design' }
+        ],
+        [
+          { text: '📱 SMM', callback_data: 'mailing_dept_SMM' },
+          { text: '💼 Sales', callback_data: 'mailing_dept_Sales and communication' }
+        ],
+        [
+          { text: '👥 HR', callback_data: 'mailing_dept_HR' },
+          { text: '👑 CEO', callback_data: 'mailing_dept_CEO' }
+        ],
+        [
+          { text: '⬅️ Назад', callback_data: 'hr_mailings' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, `📢 <b>Розсилка по відділу</b>
+
+Оберіть відділ:`, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка startMailingToDepartment:', error);
+  }
+}
+
+// Розсилка по команді
+async function startMailingToTeam(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: 'PPC', callback_data: 'mailing_team_PPC' },
+          { text: 'Target/Kris', callback_data: 'mailing_team_Target/Kris team' }
+        ],
+        [
+          { text: 'Target/Lera', callback_data: 'mailing_team_Target/Lera team' },
+          { text: 'Design', callback_data: 'mailing_team_Design' }
+        ],
+        [
+          { text: 'SMM', callback_data: 'mailing_team_SMM' },
+          { text: 'Sales', callback_data: 'mailing_team_Sales and communication' }
+        ],
+        [
+          { text: '⬅️ Назад', callback_data: 'hr_mailings' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, `📢 <b>Розсилка по команді</b>
+
+Оберіть команду:`, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка startMailingToTeam:', error);
+  }
+}
+
+// Розсилка по ролі
+async function startMailingToRole(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '👑 CEO', callback_data: 'mailing_role_CEO' },
+          { text: '👥 HR', callback_data: 'mailing_role_HR' }
+        ],
+        [
+          { text: '👨‍💼 PM', callback_data: 'mailing_role_PM' },
+          { text: '👤 Employee', callback_data: 'mailing_role_EMP' }
+        ],
+        [
+          { text: '⬅️ Назад', callback_data: 'hr_mailings' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, `📢 <b>Розсилка по ролі</b>
+
+Оберіть роль:`, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка startMailingToRole:', error);
+  }
+}
+
+// Обробка розсилки HR
+async function handleHRMailing(chatId, telegramId, text) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData || regData.step !== 'mailing_message') {
+      return false;
+    }
+
+    // Відправляємо розсилку
+    await sendMailing(chatId, telegramId, regData.data, text);
+    registrationCache.delete(telegramId);
+    return true;
+  } catch (error) {
+    console.error('❌ Помилка handleHRMailing:', error);
+    return false;
+  }
+}
+
+// Обробка вибраного відділу для розсилки
+async function startMailingToDepartmentSelected(chatId, telegramId, department) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    registrationCache.set(telegramId, {
+      step: 'mailing_message',
+      data: { type: 'department', department: department }
+    });
+
+    await sendMessage(chatId, `📢 <b>Розсилка по відділу: ${department}</b>
+
+Введіть текст повідомлення:`);
+  } catch (error) {
+    console.error('❌ Помилка startMailingToDepartmentSelected:', error);
+  }
+}
+
+// Обробка вибраної команди для розсилки
+async function startMailingToTeamSelected(chatId, telegramId, team) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    registrationCache.set(telegramId, {
+      step: 'mailing_message',
+      data: { type: 'team', team: team }
+    });
+
+    await sendMessage(chatId, `📢 <b>Розсилка по команді: ${team}</b>
+
+Введіть текст повідомлення:`);
+  } catch (error) {
+    console.error('❌ Помилка startMailingToTeamSelected:', error);
+  }
+}
+
+// Обробка вибраної ролі для розсилки
+async function startMailingToRoleSelected(chatId, telegramId, role) {
+  try {
+    const userRole = await getUserRole(telegramId);
+    if (userRole !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    registrationCache.set(telegramId, {
+      step: 'mailing_message',
+      data: { type: 'role', role: role }
+    });
+
+    await sendMessage(chatId, `📢 <b>Розсилка по ролі: ${role}</b>
+
+Введіть текст повідомлення:`);
+  } catch (error) {
+    console.error('❌ Помилка startMailingToRoleSelected:', error);
+  }
+}
+
+// Відправка розсилки
+async function sendMailing(chatId, telegramId, mailingData, message) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    let recipients = [];
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено. Розсилка недоступна.');
+      return;
+    }
+
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Employees'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця співробітників не знайдена.');
+      return;
+    }
+
+    const rows = await sheet.getRows();
+    
+    switch (mailingData.type) {
+      case 'all':
+        recipients = rows.map(row => row.get('TelegramID')).filter(id => id);
+        break;
+      case 'department':
+        recipients = rows
+          .filter(row => row.get('Department') === mailingData.department)
+          .map(row => row.get('TelegramID'))
+          .filter(id => id);
+        break;
+      case 'team':
+        recipients = rows
+          .filter(row => row.get('Team') === mailingData.team)
+          .map(row => row.get('TelegramID'))
+          .filter(id => id);
+        break;
+      case 'role':
+        // Отримуємо ролі з таблиці Roles
+        const rolesSheet = doc.sheetsByTitle['Roles'];
+        if (rolesSheet) {
+          const roleRows = await rolesSheet.getRows();
+          const roleUsers = roleRows
+            .filter(row => row.get('Role') === mailingData.role)
+            .map(row => row.get('TelegramID'))
+            .filter(id => id);
+          recipients = roleUsers;
+        }
+        break;
+    }
+
+    if (recipients.length === 0) {
+      await sendMessage(chatId, '❌ Отримувачі не знайдені.');
+      return;
+    }
+
+    // Відправляємо повідомлення
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const recipientId of recipients) {
+      try {
+        await bot.sendMessage(recipientId, `📢 <b>Повідомлення від HR</b>\n\n${message}`, { parse_mode: 'HTML' });
+        successCount++;
+      } catch (error) {
+        console.error(`❌ Помилка відправки до ${recipientId}:`, error);
+        failCount++;
+      }
+    }
+
+    // Підтвердження HR
+    const resultText = `✅ <b>Розсилка завершена!</b>
+
+📊 <b>Результат:</b>
+• Відправлено: ${successCount}
+• Помилок: ${failCount}
+• Всього отримувачів: ${recipients.length}
+
+<b>Повідомлення:</b>
+${message}`;
+
+    await sendMessage(chatId, resultText);
+
+  } catch (error) {
+    console.error('❌ Помилка sendMailing:', error);
+    await sendMessage(chatId, '❌ Помилка відправки розсилки.');
   }
 }
 
