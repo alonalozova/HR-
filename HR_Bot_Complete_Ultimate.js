@@ -176,14 +176,16 @@ async function processMessage(message) {
       return;
     }
     
-    // Обробка реєстрації
-    if (registrationCache.has(telegramId)) {
-      await handleRegistrationStep(chatId, telegramId, text);
+    // Обробка відпусток (пріоритет над реєстрацією)
+    console.log('🔍 processMessage: Перевіряємо handleVacationProcess для', telegramId, 'текст:', text);
+    if (await handleVacationProcess(chatId, telegramId, text)) {
+      console.log('✅ handleVacationProcess обробив повідомлення');
       return;
     }
     
-    // Обробка відпусток
-    if (await handleVacationProcess(chatId, telegramId, text)) {
+    // Обробка реєстрації
+    if (registrationCache.has(telegramId)) {
+      await handleRegistrationStep(chatId, telegramId, text);
       return;
     }
     
@@ -806,6 +808,8 @@ async function showVacationForm(chatId, telegramId) {
       step: 'vacation_start_date',
       data: { type: 'vacation' }
     });
+    
+    console.log('📝 showVacationForm: Встановлено кеш для', telegramId, registrationCache.get(telegramId));
 
     await sendMessage(chatId, text);
   } catch (error) {
