@@ -37,6 +37,11 @@ const registrationCache = new Map();
 // 📊 ІНІЦІАЛІЗАЦІЯ GOOGLE SHEETS
 async function initGoogleSheets() {
   try {
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !SPREADSHEET_ID) {
+      console.error('❌ Відсутні Google Sheets credentials');
+      return false;
+    }
+
     const serviceAccountAuth = new JWT({
       email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
       key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
@@ -48,7 +53,9 @@ async function initGoogleSheets() {
     console.log('✅ Google Sheets підключено:', doc.title);
     return true;
   } catch (error) {
-    console.error('❌ Помилка підключення до Google Sheets:', error);
+    console.error('❌ Помилка підключення до Google Sheets:', error.message);
+    // Не зупиняємо сервер, якщо Google Sheets недоступний
+    doc = null;
     return false;
   }
 }
@@ -57,13 +64,28 @@ async function initGoogleSheets() {
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({
-    status: 'OK',
-    message: 'HR Bot is running',
-    timestamp: new Date().toISOString(),
-    version: '2.0.0-complete',
-    sheets_connected: doc ? true : false
-  });
+  try {
+    res.status(200).json({
+      status: 'OK',
+      message: 'HR Bot is running',
+      timestamp: new Date().toISOString(),
+      version: '2.0.0-complete',
+      sheets_connected: doc ? true : false,
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    console.error('Health check error:', error);
+    res.status(500).json({
+      status: 'ERROR',
+      message: 'Health check failed',
+      error: error.message
+    });
+  }
+});
+
+// Додатковий health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
 });
 
 app.post('/webhook', async (req, res) => {
@@ -219,6 +241,11 @@ async function getUserInfo(telegramId) {
       }
     }
     
+    if (!doc) {
+      console.warn('Google Sheets не підключено, повертаємо null');
+      return null;
+    }
+    
     await doc.loadInfo();
     const sheet = doc.sheetsByTitle['Employees'];
     if (!sheet) return null;
@@ -253,6 +280,11 @@ async function getUserInfo(telegramId) {
 // 🔐 ОТРИМАННЯ РОЛІ
 async function getUserRole(telegramId) {
   try {
+    if (!doc) {
+      console.warn('Google Sheets не підключено, повертаємо EMP');
+      return 'EMP';
+    }
+    
     await doc.loadInfo();
     const sheet = doc.sheetsByTitle['Roles'];
     if (!sheet) return 'EMP';
@@ -1277,20 +1309,41 @@ async function processEmergencyVacation(chatId, telegramId) {
 // 🚀 ЗАПУСК СЕРВЕРА
 async function startServer() {
   try {
-    await initGoogleSheets();
+    console.log('🚀 Запуск HR Bot...');
     
-    if (WEBHOOK_URL) {
-      await bot.setWebHook(`${WEBHOOK_URL}/webhook`);
-      console.log('✅ Webhook встановлено:', `${WEBHOOK_URL}/webhook`);
+    // Ініціалізуємо Google Sheets (не критично для запуску)
+    const sheetsConnected = await initGoogleSheets();
+    if (!sheetsConnected) {
+      console.warn('⚠️ Google Sheets не підключено, але сервер працюватиме');
     }
     
-    app.listen(PORT, '0.0.0.0', () => {
+    // Встановлюємо webhook (не критично для запуску)
+    if (WEBHOOK_URL) {
+      try {
+        await bot.setWebHook(`${WEBHOOK_URL}/webhook`);
+        console.log('✅ Webhook встановлено:', `${WEBHOOK_URL}/webhook`);
+      } catch (webhookError) {
+        console.warn('⚠️ Помилка встановлення webhook:', webhookError.message);
+      }
+    } else {
+      console.warn('⚠️ WEBHOOK_URL не встановлено');
+    }
+    
+    // Запускаємо сервер
+    const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 HR Bot запущено на порту ${PORT}`);
       console.log(`📍 Health check: http://localhost:${PORT}/`);
-      console.log(`📨 Webhook: ${WEBHOOK_URL}/webhook`);
+      console.log(`📨 Webhook: ${WEBHOOK_URL || 'не встановлено'}/webhook`);
+      console.log(`📊 Google Sheets: ${sheetsConnected ? 'підключено' : 'не підключено'}`);
     });
+    
+    // Обробка помилок сервера
+    server.on('error', (error) => {
+      console.error('❌ Помилка сервера:', error);
+    });
+    
   } catch (error) {
-    console.error('❌ Помилка запуску:', error);
+    console.error('❌ Критична помилка запуску:', error);
     process.exit(1);
   }
 }
