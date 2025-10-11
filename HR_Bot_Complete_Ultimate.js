@@ -1932,6 +1932,7 @@ async function handleAIQuestion(chatId, telegramId, text) {
 // Генерація AI відповіді (fallback)
 function generateAIResponse(userInput, type) {
   const input = userInput.toLowerCase();
+  console.log(`🤖 AI Input: "${userInput}" -> "${input}"`);
   
   // База знань для відповідей
   const responses = {
@@ -1984,15 +1985,29 @@ function generateAIResponse(userInput, type) {
   else if (input.includes('спізнен') || input.includes('запізнен')) topic = 'late';
   else if (input.includes('лікарнян') || input.includes('хворі')) topic = 'sick';
   else if (input.includes('hr') || input.includes('кадр')) topic = 'hr';
-  else if (input.includes('вигоранн') || input.includes('вигорание') || input.includes('burnout') || input.includes('вигоріла') || input.includes('вигоріла') || input.includes('вигораю') || input.includes('вигорає')) topic = 'burnout';
+  else if (input.includes('вигоранн') || input.includes('вигорание') || input.includes('burnout') || input.includes('вигоріла') || input.includes('вигораю') || input.includes('вигорає') || input.includes('вигорів') || input.includes('вигоріти') || input.includes('вигорають')) topic = 'burnout';
   else if (input.includes('стрес') || input.includes('стресс') || input.includes('напружен')) topic = 'stress';
   else if (input.includes('мотивац') || input.includes('мотив') || input.includes('втрат')) topic = 'motivation';
   else if (input.includes('втом') || input.includes('устал') || input.includes('перевантажен')) topic = 'burnout';
   else if (input.includes('проблем') || input.includes('труднощ') || input.includes('складно')) topic = 'stress';
   
+  console.log(`🤖 AI Detected Topic: "${topic}"`);
+  
   // Вибір випадкової відповіді
   const topicResponses = responses[topic];
+  if (!topicResponses) {
+    console.log(`🤖 AI Topic not found, using fallback`);
+    // Fallback відповідь для невідомих тем
+    const fallbackResponses = [
+      "Дякую за ваше питання! Я можу допомогти з питаннями про відпустки, remote роботу, спізнення, лікарняний та інші HR питання. Спробуйте переформулювати питання або зверніться до HR через ASAP запит.",
+      "Цікаве питання! Якщо це стосується HR процесів, я можу допомогти. Інакше рекомендую звернутися до HR через розділ 'ASAP запит' для отримання детальної відповіді.",
+      "Я готовий допомогти з HR питаннями! Можете запитати про відпустки, remote роботу, спізнення, лікарняний. Для складніших питань рекомендую звернутися до HR."
+    ];
+    return fallbackResponses[Math.floor(Math.random() * fallbackResponses.length)];
+  }
+  
   const randomResponse = topicResponses[Math.floor(Math.random() * topicResponses.length)];
+  console.log(`🤖 AI Response: "${randomResponse.substring(0, 100)}..."`);
   
   return randomResponse;
 }
