@@ -1971,18 +1971,23 @@ async function getGroqAIResponse(userInput, type) {
 Відповідай українською мовою, дружелюбно та професійно. Якщо потрібна додаткова допомога HR, направляй до відповідних розділів бота.`;
 
     const completion = await groq.chat.completions.create({
-      model: "llama3-8b-8192", // Швидка безкоштовна модель
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userInput }
       ],
+      model: "llama3-8b-8192",
       max_tokens: 500,
       temperature: 0.7
     });
 
-    return completion.choices[0].message.content;
+    if (completion.choices && completion.choices[0] && completion.choices[0].message) {
+      return completion.choices[0].message.content;
+    } else {
+      console.error('❌ Groq AI: некоректна відповідь:', completion);
+      throw new Error('Некоректна відповідь від Groq AI');
+    }
   } catch (error) {
-    console.error('❌ Groq AI помилка:', error);
+    console.error('❌ Groq AI помилка:', error.message || error);
     throw error;
   }
 }
