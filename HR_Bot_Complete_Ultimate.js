@@ -160,7 +160,7 @@ async function processMessage(message) {
     if (text === '/start') {
       const user = await getUserInfo(telegramId);
       if (!user) {
-        await startRegistration(chatId, telegramId, username, firstName, lastName);
+        await showWelcomeMessage(chatId, telegramId, username, firstName, lastName);
       } else {
         await showMainMenu(chatId, telegramId);
       }
@@ -180,6 +180,11 @@ async function processMessage(message) {
     
     // Обробка розсилки HR
     if (await handleHRMailing(chatId, telegramId, text)) {
+      return;
+    }
+    
+    // Обробка AI питань
+    if (await handleAIQuestion(chatId, telegramId, text)) {
       return;
     }
     
@@ -235,6 +240,13 @@ async function processCallback(callbackQuery) {
       'hr_mailing_department': () => startMailingToDepartment(chatId, telegramId),
       'hr_mailing_team': () => startMailingToTeam(chatId, telegramId),
       'hr_mailing_role': () => startMailingToRole(chatId, telegramId),
+      'start_registration': () => startRegistrationFromCallback(chatId, telegramId),
+      'onboarding_notion': () => showNotionLink(chatId, telegramId),
+      'onboarding_quiz': () => showOnboardingQuiz(chatId, telegramId),
+      'onboarding_rules': () => showCompanyRules(chatId, telegramId),
+      'onboarding_structure': () => showTeamStructure(chatId, telegramId),
+      'ai_question': () => startAIQuestion(chatId, telegramId),
+      'ai_advice': () => startAIAdvice(chatId, telegramId),
       'back_to_main': () => showMainMenu(chatId, telegramId)
     };
     
@@ -416,6 +428,9 @@ async function showMainMenu(chatId, telegramId) {
     }
 
     await sendMessage(chatId, welcomeText, baseKeyboard);
+    
+    // Логування входу в головне меню
+    await logUserData(telegramId, 'main_menu_access', { role: role });
   } catch (error) {
     console.error('❌ Помилка showMainMenu:', error);
     await sendMessage(chatId, '❌ Помилка завантаження меню.');
@@ -452,6 +467,43 @@ async function handleReplyKeyboard(chatId, telegramId, text) {
   } catch (error) {
     console.error('❌ Помилка handleReplyKeyboard:', error);
     return false;
+  }
+}
+
+// 👋 ВСТУПНЕ ПОВІДОМЛЕННЯ
+async function showWelcomeMessage(chatId, telegramId, username, firstName, lastName) {
+  try {
+    const welcomeText = `🌟 <b>Привіт зірочка!</b>
+
+Я бот-помічник розроблений твоїм HR. Вона створила мене, щоб полегшити і автоматизувати процеси. Я точно стану тобі в нагоді.
+
+Почну з того, що прошу тебе зареєструватися. Це потрібно, аби надалі я міг допомагати тобі.
+
+<b>Що я вмію робити:</b>
+
+🏖️ <b>Відпустки:</b> подача заявок, перевірка балансу, календар
+🏠 <b>Remote:</b> фіксація віддаленої роботи, ліміти
+⏰ <b>Спізнення:</b> повідомлення про запізнення
+🏥 <b>Лікарняний:</b> фіксація хвороби, повідомлення HR
+📊 <b>Статистика:</b> особистий звіт за місяць
+🎯 <b>Онбординг:</b> матеріали для нових співробітників
+💬 <b>Пропозиції:</b> анонімні та іменні ідеї
+🚨 <b>ASAP:</b> термінові запити до HR
+🤖 <b>ШІ-Помічник:</b> швидкі відповіді та поради
+
+Натисніть кнопку нижче, щоб почати реєстрацію!`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📝 Почати реєстрацію', callback_data: 'start_registration' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, welcomeText, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showWelcomeMessage:', error);
   }
 }
 
@@ -910,35 +962,33 @@ async function showStatsMenu(chatId, telegramId) {
 // 🎯 МЕНЮ ОНБОРДИНГУ
 async function showOnboardingMenu(chatId, telegramId) {
   try {
-    const user = await getUserInfo(telegramId);
-    const isNew = await checkIfNewEmployee(telegramId);
-    
-    if (isNew) {
-      const text = `🎯 <b>Онбординг для новеньких</b>
+    const text = `🎯 <b>Онбординг та навчання</b>
 
-Привіт! Вітаю тебе в найкращій команді особливих Людей🧡
-Тепер ти її частина. Тут зібрана основна інформація про нас.
+Тут зібрана вся необхідна інформація для роботи в команді.
 
-Твоя задача познайомитися, і якщо виникнуть питання, обов'язково звертайся до HR.`;
+Оберіть дію:`;
 
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '📚 Матеріали адаптації', callback_data: 'onboarding_notion' }
-          ],
-          [
-            { text: '❓ Тестування знань', callback_data: 'onboarding_quiz' }
-          ],
-          [
-            { text: '⬅️ Назад', callback_data: 'back_to_main' }
-          ]
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📚 Матеріали адаптації', callback_data: 'onboarding_notion' }
+        ],
+        [
+          { text: '❓ Тестування знань', callback_data: 'onboarding_quiz' }
+        ],
+        [
+          { text: '📖 Правила компанії', callback_data: 'onboarding_rules' }
+        ],
+        [
+          { text: '👥 Структура команди', callback_data: 'onboarding_structure' }
+        ],
+        [
+          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
-      };
+      ]
+    };
 
-      await sendMessage(chatId, text, keyboard);
-    } else {
-      await sendMessage(chatId, '❌ Цей розділ доступний тільки для нових співробітників.');
-    }
+    await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showOnboardingMenu:', error);
   }
@@ -1654,6 +1704,289 @@ ${message}`;
   } catch (error) {
     console.error('❌ Помилка sendMailing:', error);
     await sendMessage(chatId, '❌ Помилка відправки розсилки.');
+  }
+}
+
+// 📝 ДОДАТКОВІ ФУНКЦІЇ
+
+// Початок реєстрації з callback
+async function startRegistrationFromCallback(chatId, telegramId) {
+  try {
+    const user = await bot.getChatMember(chatId, telegramId);
+    await startRegistration(chatId, telegramId, user.user.username, user.user.first_name, user.user.last_name);
+  } catch (error) {
+    console.error('❌ Помилка startRegistrationFromCallback:', error);
+    await startRegistration(chatId, telegramId, null, null, null);
+  }
+}
+
+// Показати Notion посилання
+async function showNotionLink(chatId, telegramId) {
+  try {
+    const text = `📚 <b>Матеріали адаптації</b>
+
+Ось посилання на файл з адаптацією для відділу трафіку:
+
+🔗 https://superficial-sort-084.notion.site/3b5c00ad8a42473bbef49bb26f076ebd
+
+Після перегляду матеріалів, поверніться сюди для проходження тестування!`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '⬅️ Назад', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showNotionLink:', error);
+  }
+}
+
+// Показати тестування
+async function showOnboardingQuiz(chatId, telegramId) {
+  try {
+    const text = `❓ <b>Тестування знань</b>
+
+Познайомився з матеріалами? Давай тепер пройдемо коротеньке опитування, і дізнаємося чи про все ти пам'ятаєш.
+
+Воно не впливає на наше до тебе відношення) тож have fun)
+
+🔗 https://forms.google.com/onboarding-quiz
+
+Після завершення тесту, ти одразу побачиш кількість правильних відповідей та пояснення помилок.`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '⬅️ Назад', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showOnboardingQuiz:', error);
+  }
+}
+
+// Показати правила компанії
+async function showCompanyRules(chatId, telegramId) {
+  try {
+    const text = `📖 <b>Правила компанії</b>
+
+<b>Робочий режим:</b>
+• Пн-Пт 10:00-18:00
+• Спізнення з 10:21
+• Remote до 10:30 (ліміт 14 днів/міс для офлайн/гібрид)
+
+<b>Відпустки:</b>
+• Мін 1 день, макс 7 календарних днів за раз
+• 3 місяці до першої відпустки
+• Накладки заборонені в межах підкоманд
+• Процес: Користувач → PM → HR
+• Ліміт 24 дні/рік
+
+<b>Лікарняний:</b>
+• Без лімітів
+• Повідомляє HR + PM
+
+<b>Нагадування:</b>
+• Дні народження за 10+7 днів тільки HR
+• Відпустка за 5 робочих днів всім
+• Спізнення 7 разів/міс = попередження`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '⬅️ Назад', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showCompanyRules:', error);
+  }
+}
+
+// Показати структуру команди
+async function showTeamStructure(chatId, telegramId) {
+  try {
+    const text = `👥 <b>Структура команди</b>
+
+<b>Marketing:</b>
+• PPC
+• Target/Kris team
+• Target/Lera team
+
+<b>Design:</b>
+• Head of Design + Motion Designer
+• Static designer
+• Video designer
+• SMM designer
+
+<b>SMM:</b>
+• Head of SMM
+• SMM specialist
+• Producer
+• PM
+
+<b>Sales and communication:</b>
+• Sales and communication manager
+
+<b>HR:</b>
+• HR
+
+<b>CEO:</b>
+• CEO
+
+Target керує CEO прямо.`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '⬅️ Назад', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showTeamStructure:', error);
+  }
+}
+
+// AI функції
+async function startAIQuestion(chatId, telegramId) {
+  try {
+    registrationCache.set(telegramId, {
+      step: 'ai_question',
+      data: { type: 'question' }
+    });
+
+    await sendMessage(chatId, `🤖 <b>ШІ-Помічник - Питання</b>
+
+Задайте ваше питання, і я надам вам швидку відповідь!`);
+  } catch (error) {
+    console.error('❌ Помилка startAIQuestion:', error);
+  }
+}
+
+async function startAIAdvice(chatId, telegramId) {
+  try {
+    registrationCache.set(telegramId, {
+      step: 'ai_advice',
+      data: { type: 'advice' }
+    });
+
+    await sendMessage(chatId, `🤖 <b>ШІ-Помічник - Порада</b>
+
+Опишіть вашу ситуацію, і я дам вам корисну пораду!`);
+  } catch (error) {
+    console.error('❌ Помилка startAIAdvice:', error);
+  }
+}
+
+// Обробка AI питань
+async function handleAIQuestion(chatId, telegramId, text) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData || (regData.step !== 'ai_question' && regData.step !== 'ai_advice')) {
+      return false;
+    }
+
+    // Простий AI на основі ключових слів
+    const response = generateAIResponse(text, regData.data.type);
+    
+    await sendMessage(chatId, `🤖 <b>ШІ-Помічник відповідає:</b>\n\n${response}`);
+    
+    registrationCache.delete(telegramId);
+    return true;
+  } catch (error) {
+    console.error('❌ Помилка handleAIQuestion:', error);
+    return false;
+  }
+}
+
+// Генерація AI відповіді
+function generateAIResponse(userInput, type) {
+  const input = userInput.toLowerCase();
+  
+  // База знань для відповідей
+  const responses = {
+    vacation: [
+      "Для відпустки потрібно подати заявку через бот. Максимум 7 днів за раз, мінімум 1 день. Перевірте, чи немає перетинів з колегами в команді.",
+      "Відпустки затверджуються через процес: Ви → PM → HR. Не забудьте перевірити баланс відпусток в розділі 'Відпустки'."
+    ],
+    remote: [
+      "Для remote роботи натисніть 'Remote' в меню та оберіть потрібну дату. Ліміт: 14 днів на місяць для офлайн/гібрид співробітників.",
+      "Remote робота автоматично затверджується, але не забудьте повідомити до 11:00 ранку."
+    ],
+    late: [
+      "Якщо спізнюєтесь, натисніть 'Спізнення' та повідомте HR та PM. Спізнення рахуються з 10:21.",
+      "7 спізнень на місяць = попередження. Будьте пунктуальними!"
+    ],
+    sick: [
+      "При хворобі натисніть 'Лікарняний' та повідомте HR та PM. Лікарняний без лімітів.",
+      "Лікарняний автоматично затверджується, але обов'язково повідомте HR."
+    ],
+    hr: [
+      "Для питань до HR використовуйте розділ 'ASAP запит' для термінових питань або 'Пропозиції' для ідей.",
+      "HR затверджує всі заявки на відпустки та керує всіма HR процесами."
+    ],
+    general: [
+      "Використовуйте меню бота для навігації. Всі функції доступні через кнопки.",
+      "Якщо у вас є питання, можете завжди звернутися до HR через бот.",
+      "Не забудьте регулярно перевіряти статистику та баланси в розділі 'Статистика'."
+    ]
+  };
+  
+  // Визначення теми питання
+  let topic = 'general';
+  if (input.includes('відпустк') || input.includes('отпуск')) topic = 'vacation';
+  else if (input.includes('remote') || input.includes('віддален')) topic = 'remote';
+  else if (input.includes('спізнен') || input.includes('запізнен')) topic = 'late';
+  else if (input.includes('лікарнян') || input.includes('хворі')) topic = 'sick';
+  else if (input.includes('hr') || input.includes('кадр')) topic = 'hr';
+  
+  // Вибір випадкової відповіді
+  const topicResponses = responses[topic];
+  const randomResponse = topicResponses[Math.floor(Math.random() * topicResponses.length)];
+  
+  return randomResponse;
+}
+
+// Логування даних користувачів
+async function logUserData(telegramId, action, data = {}) {
+  try {
+    if (!doc) return;
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['UserLogs'];
+    if (!sheet) {
+      sheet = await doc.addSheet({ 
+        title: 'UserLogs', 
+        headerValues: ['Timestamp', 'TelegramID', 'Action', 'Data', 'UserInfo'] 
+      });
+    }
+    
+    const user = await getUserInfo(telegramId);
+    const userInfo = user ? `${user.fullName} (${user.department}/${user.team})` : 'Unknown';
+    
+    await sheet.addRow({
+      Timestamp: new Date().toISOString(),
+      TelegramID: telegramId,
+      Action: action,
+      Data: JSON.stringify(data),
+      UserInfo: userInfo
+    });
+    
+    console.log(`📝 Logged: ${telegramId} - ${action}`);
+  } catch (error) {
+    console.error('❌ Помилка logUserData:', error);
   }
 }
 
