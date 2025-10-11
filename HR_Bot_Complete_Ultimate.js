@@ -9,7 +9,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
-const Groq = require('groq-sdk');
+// const Groq = require('groq-sdk'); // Тимчасово відключено
 
 // ⚙️ НАЛАШТУВАННЯ
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -32,16 +32,8 @@ const bot = new TelegramBot(BOT_TOKEN);
 const app = express();
 let doc;
 
-// 🧠 Groq AI (безкоштовний)
-let groq = null;
-if (process.env.GROQ_API_KEY) {
-  groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY,
-  });
-  console.log('✅ Groq AI підключено (безкоштовний)');
-} else {
-  console.warn('⚠️ GROQ_API_KEY не встановлено - AI недоступний');
-}
+// 🧠 AI Система (проста, але працює)
+console.log('✅ AI система активна (проста база знань)');
 
 // 🛡️ ЗАХИСТ ВІД ДУБЛЮВАННЯ
 const processedUpdates = new Set();
@@ -1913,24 +1905,9 @@ async function handleAIQuestion(chatId, telegramId, text) {
     console.log(`🤖 AI Question from ${telegramId}: ${text}`);
     console.log(`🤖 AI Step: ${regData.step}, Type: ${regData.data.type}`);
 
-    let response;
-    
-    // Спробуємо Groq AI, якщо доступний
-    if (groq) {
-      try {
-        response = await getGroqAIResponse(text, regData.data.type);
-        console.log(`🤖 Groq AI Response: ${response}`);
-      } catch (error) {
-        console.error('❌ Groq AI помилка:', error);
-        // Fallback до простої бази знань
-        response = generateAIResponse(text, regData.data.type);
-        console.log(`🤖 Fallback Response: ${response}`);
-      }
-    } else {
-      // Використовуємо просту базу знань
-      response = generateAIResponse(text, regData.data.type);
-      console.log(`🤖 Simple AI Response: ${response}`);
-    }
+    // Використовуємо просту базу знань (гарантовано працює)
+    const response = generateAIResponse(text, regData.data.type);
+    console.log(`🤖 AI Response: ${response}`);
     
     await sendMessage(chatId, `🤖 <b>ШІ-Помічник відповідає:</b>\n\n${response}`);
     
@@ -1939,7 +1916,7 @@ async function handleAIQuestion(chatId, telegramId, text) {
       type: regData.data.type, 
       question: text, 
       response: response,
-      ai_type: groq ? 'groq' : 'simple'
+      ai_type: 'simple'
     });
     
     registrationCache.delete(telegramId);
@@ -1950,47 +1927,7 @@ async function handleAIQuestion(chatId, telegramId, text) {
   }
 }
 
-// Groq AI відповідь (безкоштовний)
-async function getGroqAIResponse(userInput, type) {
-  try {
-    const systemPrompt = `Ти HR помічник української компанії "Люди.Digital". 
-    
-Твоя роль:
-- Надавати корисні поради з HR питань
-- Допомагати з питаннями про відпустки, remote роботу, спізнення, лікарняний
-- Підтримувати співробітників у складних ситуаціях
-- Давати професійні поради щодо кар'єри та роботи
-
-Правила компанії:
-- Робочий режим: Пн-Пт 10:00-18:00
-- Спізнення з 10:21
-- Remote ліміт: 14 днів/місяць
-- Відпустки: мін 1 день, макс 7 днів за раз, 24 дні/рік
-- Процес відпусток: Користувач → PM → HR
-
-Відповідай українською мовою, дружелюбно та професійно. Якщо потрібна додаткова допомога HR, направляй до відповідних розділів бота.`;
-
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userInput }
-      ],
-      model: "llama3-8b-8192",
-      max_tokens: 500,
-      temperature: 0.7
-    });
-
-    if (completion.choices && completion.choices[0] && completion.choices[0].message) {
-      return completion.choices[0].message.content;
-    } else {
-      console.error('❌ Groq AI: некоректна відповідь:', completion);
-      throw new Error('Некоректна відповідь від Groq AI');
-    }
-  } catch (error) {
-    console.error('❌ Groq AI помилка:', error.message || error);
-    throw error;
-  }
-}
+// Groq AI функція видалена - використовуємо просту базу знань
 
 // Генерація AI відповіді (fallback)
 function generateAIResponse(userInput, type) {
@@ -2019,9 +1956,9 @@ function generateAIResponse(userInput, type) {
       "HR затверджує всі заявки на відпустки та керує всіма HR процесами."
     ],
     burnout: [
-      "Вигорання - це серйозна проблема. Рекомендую: 1) Взяти відпустку для відновлення, 2) Обговорити навантаження з PM, 3) Звернутися до HR через ASAP запит для підтримки.",
-      "Якщо відчуваєте вигорання, це сигнал про необхідність змін. Можете анонімно поділитися своїми думками через розділ 'Пропозиції' або терміново звернутися до HR через 'ASAP запит'.",
-      "Вигорання часто пов'язане з перевантаженням. Розгляньте можливість remote роботи або короткострокової відпустки. HR готовий допомогти в цій ситуації."
+      "🫂 Розумію, що ви відчуваєте вигорання. Це серйозна проблема, але є рішення:\n\n🔴 Негайні кроки:\n• Візьміть кілька днів відпустки для відновлення\n• Обмежте робочі години (не працюйте понаднормово)\n• Поговоріть з PM про зменшення навантаження\n• Зверніться до HR через ASAP запит\n\n🟡 Довгострокові заходи:\n• Перегляньте свої пріоритети\n• Встановіть межі між роботою та особистим часом\n• Розгляньте зміну підходів до роботи\n\nПам'ятайте: вигорання - це не ваша провина, а сигнал про необхідність змін!",
+      "💙 Вигорання - це нормальна реакція на хронічний стрес. Важливо діяти:\n\n1️⃣ Візьміть час для відпочинку\n2️⃣ Обговоріть ситуацію з керівником\n3️⃣ Розгляньте можливість remote роботи\n4️⃣ Зверніться до HR за підтримкою\n\nКомпанія зацікавлена у вашому благополуччі та готова допомогти знайти рішення!",
+      "🌟 Вигорання можна подолати! Ось план дій:\n\n⏰ Короткостроково:\n• Відпустка для відновлення\n• Зменшення навантаження\n• Підтримка від команди\n\n📈 Довгостроково:\n• Зміна підходів до роботи\n• Нові цілі та виклики\n• Розвиток кар'єри\n\nHR готовий обговорити індивідуальний план підтримки!"
     ],
     stress: [
       "Стрес на роботі - нормальне явище, але важливо ним керувати. Спробуйте: 1) Планувати день заздалегідь, 2) Робити короткі перерви, 3) Обговорювати проблеми з колегами або PM.",
@@ -2047,7 +1984,7 @@ function generateAIResponse(userInput, type) {
   else if (input.includes('спізнен') || input.includes('запізнен')) topic = 'late';
   else if (input.includes('лікарнян') || input.includes('хворі')) topic = 'sick';
   else if (input.includes('hr') || input.includes('кадр')) topic = 'hr';
-  else if (input.includes('вигоранн') || input.includes('вигорание') || input.includes('burnout')) topic = 'burnout';
+  else if (input.includes('вигоранн') || input.includes('вигорание') || input.includes('burnout') || input.includes('вигоріла') || input.includes('вигоріла') || input.includes('вигораю') || input.includes('вигорає')) topic = 'burnout';
   else if (input.includes('стрес') || input.includes('стресс') || input.includes('напружен')) topic = 'stress';
   else if (input.includes('мотивац') || input.includes('мотив') || input.includes('втрат')) topic = 'motivation';
   else if (input.includes('втом') || input.includes('устал') || input.includes('перевантажен')) topic = 'burnout';
