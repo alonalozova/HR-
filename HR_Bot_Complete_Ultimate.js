@@ -2343,28 +2343,33 @@ async function logUserData(telegramId, action, data = {}) {
 // 🚀 ЗАПУСК СЕРВЕРА
 async function startServer() {
   try {
-    // Ініціалізація Google Sheets
-    await initGoogleSheets();
-    
-    // Встановлення webhook
-    if (WEBHOOK_URL) {
-      await bot.setWebHook(`${WEBHOOK_URL}/webhook`);
-      console.log('✅ Webhook встановлено:', WEBHOOK_URL);
-    } else {
-      console.warn('⚠️ WEBHOOK_URL не встановлено');
-    }
-    
-    // Запуск сервера
+    // Запуск сервера НЕБЛОКУЮЧО
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 HR Bot Ultimate запущено на порту ${PORT}`);
       console.log(`📍 Health check: http://localhost:${PORT}/`);
       console.log(`📨 Webhook: ${WEBHOOK_URL || 'не встановлено'}`);
     });
     
-    // Обробка помилок
+    // Обробка помилок сервера
     server.on('error', (error) => {
       console.error('❌ Помилка сервера:', error);
     });
+    
+    // Ініціалізація Google Sheets в фоні (неблокуюче)
+    initGoogleSheets().catch(error => {
+      console.error('❌ Помилка ініціалізації Google Sheets:', error);
+      console.log('🔄 Спробуємо знову через 30 секунд...');
+      setTimeout(() => initGoogleSheets(), 30000);
+    });
+    
+    // Встановлення webhook в фоні (неблокуюче)
+    if (WEBHOOK_URL) {
+      bot.setWebHook(`${WEBHOOK_URL}/webhook`)
+        .then(() => console.log('✅ Webhook встановлено:', WEBHOOK_URL))
+        .catch(error => console.error('❌ Помилка webhook:', error));
+    } else {
+      console.warn('⚠️ WEBHOOK_URL не встановлено');
+    }
     
   } catch (error) {
     console.error('❌ Помилка запуску сервера:', error);
