@@ -222,6 +222,32 @@ app.use(express.json());
 
 // Health check endpoints
 app.get('/', (req, res) => {
+  // Тимчасово без rate limiting для Railway healthcheck
+  const userAgent = req.get('User-Agent') || '';
+  const isRailwayHealth = userAgent.includes('Railway') || userAgent.includes('railway');
+  
+  console.log('Health check request', { 
+    userAgent, 
+    isRailwayHealth, 
+    ip: req.ip,
+    url: req.url 
+  });
+  
+  if (isRailwayHealth) {
+    // Швидкий відгук для Railway без rate limiting
+    console.log('Railway health check - bypassing rate limit');
+    return res.status(200).json({
+      status: 'OK',
+      message: 'HR Bot Ultimate is running',
+      timestamp: new Date().toISOString(),
+      version: '3.0.0-ultimate-railway-fix',
+      sheets_connected: doc ? true : false,
+      uptime: process.uptime()
+    });
+  }
+  
+  // Для звичайних запитів
+  console.log('Regular health check');
   res.status(200).json({
     status: 'OK',
     message: 'HR Bot Ultimate is running',
