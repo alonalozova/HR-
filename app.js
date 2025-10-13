@@ -10,6 +10,7 @@ const express = require('express');
 // Імпорт сервісів
 const TelegramService = require('./services/telegram.service');
 const SheetsService = require('./services/sheets.service');
+const BulkService = require('./services/bulk.service');
 
 // Імпорт утиліт
 const { logger } = require('./utils/errors');
@@ -39,6 +40,7 @@ if (!HR_CHAT_ID) {
 // 🤖 ІНІЦІАЛІЗАЦІЯ СЕРВІСІВ
 const telegramService = new TelegramService(BOT_TOKEN);
 const sheetsService = new SheetsService();
+const bulkService = new BulkService(sheetsService);
 
 // 🚀 EXPRESS APP
 const app = express();
@@ -63,9 +65,33 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     services: {
       telegram: 'active',
-      sheets: sheetsService.isInitialized ? 'active' : 'inactive'
+      sheets: sheetsService.isInitialized ? 'active' : 'inactive',
+      bulk: 'active'
     }
   });
+});
+
+// Bulk операції endpoint для HR панелі
+app.get('/api/stats/:year/:month', async (req, res) => {
+  try {
+    const { year, month } = req.params;
+    const stats = await bulkService.getMonthlyStats(parseInt(month), parseInt(year));
+    res.json(stats);
+  } catch (error) {
+    logger.error('Error getting monthly stats', error);
+    res.status(500).json({ error: 'Failed to get monthly stats' });
+  }
+});
+
+// Очищення кешу endpoint
+app.post('/api/cache/clear', (req, res) => {
+  try {
+    bulkService.clearAllCache();
+    res.json({ message: 'Cache cleared successfully' });
+  } catch (error) {
+    logger.error('Error clearing cache', error);
+    res.status(500).json({ error: 'Failed to clear cache' });
+  }
 });
 
 // Webhook endpoint
@@ -335,16 +361,24 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
   }
 }
 
-// Отримання інформації про користувача
+// Отримання інформації про користувача (оптимізовано з bulk операціями)
 async function getUserInfo(telegramId) {
   try {
     if (userCache.has(telegramId)) {
       return userCache.get(telegramId);
     }
 
-    // Тут буде логіка отримання з Google Sheets
-    // Поки що повертаємо тестові дані
-    const user = {
+    // Використовуємо bulk сервіс для отримання інформації
+    const usersMap = await bulkService.getUsersInfo([telegramId]);
+    const user = usersMap.get(telegramId);
+    
+    if (user) {
+      userCache.set(telegramId, user);
+      return user;
+    }
+
+    // Fallback для тестових даних
+    const testUser = {
       telegramId: telegramId,
       fullName: 'Тестовий Користувач',
       department: 'HR',
@@ -352,20 +386,18 @@ async function getUserInfo(telegramId) {
       pm: 'Тестовий PM'
     };
 
-    userCache.set(telegramId, user);
-    return user;
+    userCache.set(telegramId, testUser);
+    return testUser;
   } catch (error) {
     logger.error('Error getting user info', error, { telegramId });
     return null;
   }
 }
 
-// Перевірка перетинів відпусток
+// Перевірка перетинів відпусток (оптимізовано з bulk операціями)
 async function checkVacationConflicts(department, team, startDate, endDate, excludeUserId = null) {
   try {
-    // Тут буде логіка перевірки з Google Sheets
-    // Поки що повертаємо пустий масив
-    return [];
+    return await bulkService.getVacationConflicts(department, team, startDate, endDate, excludeUserId);
   } catch (error) {
     logger.error('Error checking vacation conflicts', error);
     return [];
