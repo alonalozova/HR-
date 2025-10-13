@@ -107,8 +107,13 @@ class SecurityService {
         standardHeaders: true,
         legacyHeaders: false,
         skip: (req) => {
-          // Пропускаємо Railway health checks
-          return req.get('User-Agent')?.includes('Railway') || false;
+          // Пропускаємо Railway health checks та railway-health endpoint
+          const userAgent = req.get('User-Agent') || '';
+          const isRailwayHealth = req.url.includes('/railway-health');
+          const isRailwayAgent = userAgent.includes('Railway') || userAgent.includes('railway');
+          const isHealthEndpoint = req.url === '/' || req.url === '/health';
+          
+          return isRailwayHealth || (isRailwayAgent && isHealthEndpoint);
         }
       }),
 
