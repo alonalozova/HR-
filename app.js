@@ -11,6 +11,7 @@ const express = require('express');
 const TelegramService = require('./services/telegram.service');
 const SheetsService = require('./services/sheets.service');
 const BulkService = require('./services/bulk.service');
+const SecurityService = require('./services/security.service');
 
 // Імпорт утиліт
 const { logger } = require('./utils/errors');
@@ -41,23 +42,30 @@ if (!HR_CHAT_ID) {
 const telegramService = new TelegramService(BOT_TOKEN);
 const sheetsService = new SheetsService();
 const bulkService = new BulkService(sheetsService);
+const securityService = new SecurityService();
 
 // 🚀 EXPRESS APP
 const app = express();
-app.use(express.json());
 
-// Health check endpoints
-app.get('/', (req, res) => {
+// 🛡️ SECURITY MIDDLEWARE
+app.use(securityService.checkBlockedIP);
+app.use(securityService.logSuspiciousActivity);
+app.use(securityService.bruteForceProtection);
+
+app.use(express.json({ limit: '10mb' })); // Ліміт розміру JSON
+
+// Health check endpoints з rate limiting
+app.get('/', securityService.getRateLimiter('health'), (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'HR Bot Ultimate is running',
     timestamp: new Date().toISOString(),
     port: PORT,
-    version: '2.0.0-modular'
+    version: '2.0.0-modular-security'
   });
 });
 
-app.get('/health', (req, res) => {
+app.get('/health', securityService.getRateLimiter('health'), (req, res) => {
   res.status(200).json({
     status: 'healthy',
     uptime: process.uptime(),
@@ -66,13 +74,14 @@ app.get('/health', (req, res) => {
     services: {
       telegram: 'active',
       sheets: sheetsService.isInitialized ? 'active' : 'inactive',
-      bulk: 'active'
+      bulk: 'active',
+      security: 'active'
     }
   });
 });
 
-// Bulk операції endpoint для HR панелі
-app.get('/api/stats/:year/:month', async (req, res) => {
+// Bulk операції endpoint для HR панелі з rate limiting
+app.get('/api/stats/:year/:month', securityService.getRateLimiter('api'), async (req, res) => {
   try {
     const { year, month } = req.params;
     const stats = await bulkService.getMonthlyStats(parseInt(month), parseInt(year));
@@ -83,8 +92,8 @@ app.get('/api/stats/:year/:month', async (req, res) => {
   }
 });
 
-// Очищення кешу endpoint
-app.post('/api/cache/clear', (req, res) => {
+// Очищення кешу endpoint з критичним rate limiting
+app.post('/api/cache/clear', securityService.getRateLimiter('critical'), (req, res) => {
   try {
     bulkService.clearAllCache();
     res.json({ message: 'Cache cleared successfully' });
@@ -94,8 +103,30 @@ app.post('/api/cache/clear', (req, res) => {
   }
 });
 
-// Webhook endpoint
-app.post('/webhook', async (req, res) => {
+// Security статистика endpoint
+app.get('/api/security/stats', securityService.getRateLimiter('critical'), (req, res) => {
+  try {
+    const stats = securityService.getSecurityStats();
+    res.json(stats);
+  } catch (error) {
+    logger.error('Error getting security stats', error);
+    res.status(500).json({ error: 'Failed to get security stats' });
+  }
+});
+
+// Очищення блокувань endpoint (тільки для адміністратора)
+app.post('/api/security/clear-blocks', securityService.getRateLimiter('critical'), (req, res) => {
+  try {
+    securityService.clearAllBlocks();
+    res.json({ message: 'All security blocks cleared successfully' });
+  } catch (error) {
+    logger.error('Error clearing security blocks', error);
+    res.status(500).json({ error: 'Failed to clear security blocks' });
+  }
+});
+
+// Webhook endpoint з rate limiting та Telegram-специфічним захистом
+app.post('/webhook', securityService.getRateLimiter('telegram'), async (req, res) => {
   try {
     const update = req.body;
     
