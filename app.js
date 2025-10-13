@@ -64,13 +64,40 @@ app.use(securityService.bruteForceProtection);
 app.use(express.json({ limit: '10mb' })); // Ліміт розміру JSON
 
 // Health check endpoints з rate limiting
-app.get('/', securityService.getRateLimiter('health'), (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    message: 'HR Bot Ultimate is running',
-    timestamp: new Date().toISOString(),
-    port: PORT,
-    version: '2.0.0-modular-security'
+app.get('/', (req, res) => {
+  // Тимчасово без rate limiting для Railway healthcheck
+  const userAgent = req.get('User-Agent') || '';
+  const isRailwayHealth = userAgent.includes('Railway') || userAgent.includes('railway');
+  
+  logger.info('Health check request', { 
+    userAgent, 
+    isRailwayHealth, 
+    ip: req.ip,
+    url: req.url 
+  });
+  
+  if (isRailwayHealth) {
+    // Швидкий відгук для Railway без rate limiting
+    logger.info('Railway health check - bypassing rate limit');
+    return res.status(200).json({
+      status: 'OK',
+      message: 'HR Bot Ultimate is running',
+      timestamp: new Date().toISOString(),
+      port: PORT,
+      version: '2.0.0-modular-security'
+    });
+  }
+  
+  // Для звичайних запитів використовуємо rate limiting
+  logger.info('Regular health check - using rate limit');
+  securityService.getRateLimiter('health')(req, res, () => {
+    res.status(200).json({
+      status: 'OK',
+      message: 'HR Bot Ultimate is running',
+      timestamp: new Date().toISOString(),
+      port: PORT,
+      version: '2.0.0-modular-security'
+    });
   });
 });
 
