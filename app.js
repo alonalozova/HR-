@@ -47,7 +47,16 @@ const securityService = new SecurityService();
 // 🚀 EXPRESS APP
 const app = express();
 
-// 🛡️ SECURITY MIDDLEWARE
+// 🏥 RAILWAY HEALTHCHECK - БЕЗ RATE LIMITING (має бути першим!)
+app.get('/railway-health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0-modular-security'
+  });
+});
+
+// 🛡️ SECURITY MIDDLEWARE (після railway-health)
 app.use(securityService.checkBlockedIP);
 app.use(securityService.logSuspiciousActivity);
 app.use(securityService.bruteForceProtection);
