@@ -25,7 +25,12 @@ if (!BOT_TOKEN) {
 
 // Попередження про відсутні змінні
 if (!SPREADSHEET_ID) console.warn('⚠️ SPREADSHEET_ID не встановлено');
-if (!HR_CHAT_ID) console.warn('⚠️ HR_CHAT_ID не встановлено');
+if (!HR_CHAT_ID) {
+  console.warn('⚠️ HR_CHAT_ID не встановлено');
+  console.warn('📝 Для отримання заявок на відпустку встановіть HR_CHAT_ID в Railway');
+} else {
+  console.log('✅ HR_CHAT_ID налаштовано:', HR_CHAT_ID);
+}
 
 // 🤖 ІНІЦІАЛІЗАЦІЯ
 const bot = new TelegramBot(BOT_TOKEN);
@@ -1949,6 +1954,9 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     // Повідомляємо PM
     await notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days);
     
+    // Повідомляємо HR про нову заявку
+    await notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days);
+    
     // Підтвердження користувачу
     await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
     
@@ -2069,6 +2077,40 @@ async function notifyPMAboutVacationRequest(user, requestId, startDate, endDate,
     });
   } catch (error) {
     console.error('❌ Помилка notifyPMAboutVacationRequest:', error);
+  }
+}
+
+// Повідомлення HR про нову заявку на відпустку
+async function notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    const message = `📋 <b>НОВА ЗАЯВКА НА ВІДПУСТКУ</b>
+
+👤 <b>Співробітник:</b> ${user.fullName}
+🏢 <b>Відділ:</b> ${user.department}
+👥 <b>Команда:</b> ${user.team}
+📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}
+📊 <b>Днів:</b> ${days}
+👤 <b>PM:</b> ${user.pm || 'Не призначено'}
+🆔 <b>ID заявки:</b> ${requestId}
+
+🔄 <b>Процес:</b> Користувач → PM → HR
+⏳ <b>Статус:</b> Очікує підтвердження PM`;
+
+    await sendMessage(HR_CHAT_ID, message);
+    
+    // Логування
+    await logUserData(user.telegramId, 'hr_notification', {
+      requestId,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      days,
+      department: user.department,
+      team: user.team
+    });
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutVacationRequest:', error);
   }
 }
 
