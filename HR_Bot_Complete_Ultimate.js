@@ -11,6 +11,56 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
+// ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
+class AppError extends Error {
+  constructor(message, statusCode, isOperational = true, context = {}) {
+    super(message);
+    this.statusCode = statusCode;
+    this.isOperational = isOperational;
+    this.context = context;
+    this.timestamp = new Date().toISOString();
+    
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+class ValidationError extends AppError {
+  constructor(message, field = null) {
+    super(message, 400, true, { field });
+    this.name = 'ValidationError';
+  }
+}
+
+class DatabaseError extends AppError {
+  constructor(message, operation = null) {
+    super(message, 500, false, { operation });
+    this.name = 'DatabaseError';
+  }
+}
+
+class TelegramError extends AppError {
+  constructor(message, chatId = null) {
+    super(message, 500, true, { chatId });
+    this.name = 'TelegramError';
+  }
+}
+
+// 📊 ЛОГЕР ДЛЯ ПОМИЛОК
+const logger = {
+  info: (message, context = {}) => {
+    console.log(`ℹ️ ${new Date().toISOString()} - ${message}`, context);
+  },
+  warn: (message, context = {}) => {
+    console.warn(`⚠️ ${new Date().toISOString()} - ${message}`, context);
+  },
+  error: (message, error = null, context = {}) => {
+    console.error(`❌ ${new Date().toISOString()} - ${message}`, error, context);
+  },
+  success: (message, context = {}) => {
+    console.log(`✅ ${new Date().toISOString()} - ${message}`, context);
+  }
+};
+
 // ⚙️ НАЛАШТУВАННЯ
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
@@ -363,9 +413,21 @@ async function sendMessage(chatId, text, keyboard = null) {
         options.reply_markup = { keyboard: keyboard, resize_keyboard: true };
       }
     }
+    
     await bot.sendMessage(chatId, text, options);
+    logger.info('Message sent successfully', { chatId, textLength: text.length });
+    
   } catch (error) {
-    console.error('❌ Помилка sendMessage:', error);
+    if (error.response?.statusCode === 403) {
+      logger.warn('Bot blocked by user', { chatId });
+      throw new TelegramError('Бот заблокований користувачем', chatId);
+    } else if (error.response?.statusCode === 400) {
+      logger.warn('Invalid message format', { chatId, error: error.response.body });
+      throw new TelegramError('Невірний формат повідомлення', chatId);
+    } else {
+      logger.error('Failed to send message', error, { chatId });
+      throw new TelegramError('Помилка відправки повідомлення', chatId);
+    }
   }
 }
 
@@ -1971,10 +2033,11 @@ async function handleVacationProcess(chatId, telegramId, text) {
 // Обробка заявки на відпустку
 async function processVacationRequest(chatId, telegramId, vacationData) {
   try {
+    logger.info('Processing vacation request', { telegramId, vacationData });
+    
     const user = await getUserInfo(telegramId);
     if (!user) {
-      await sendMessage(chatId, '❌ Помилка: користувач не знайдений. Пройдіть реєстрацію.');
-      return;
+      throw new ValidationError('Користувач не знайдений. Пройдіть реєстрацію.', 'user');
     }
     
     const { startDate, days } = vacationData;
@@ -2032,8 +2095,23 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     });
     
   } catch (error) {
-    console.error('❌ Помилка processVacationRequest:', error);
-    await sendMessage(chatId, '❌ Помилка при обробці заявки. Спробуйте пізніше або зверніться до HR.');
+    if (error instanceof ValidationError) {
+      logger.warn('Validation error in vacation request', { telegramId, error: error.message });
+      await sendMessage(chatId, `❌ ${error.message}`);
+    } else if (error instanceof DatabaseError) {
+      logger.error('Database error in vacation request', error, { telegramId });
+      await sendMessage(chatId, '❌ Помилка збереження даних. Спробуйте пізніше або зверніться до HR.');
+    } else if (error instanceof TelegramError) {
+      logger.error('Telegram error in vacation request', error, { telegramId });
+      // Не відправляємо повідомлення, якщо бот заблокований
+    } else {
+      logger.error('Unexpected error in vacation request', error, { telegramId });
+      try {
+        await sendMessage(chatId, '❌ Сталася неочікувана помилка. Спробуйте пізніше або зверніться до HR.');
+      } catch (sendError) {
+        logger.error('Failed to send error message', sendError, { telegramId });
+      }
+    }
   }
 }
 
@@ -2376,14 +2454,49 @@ async function startServer() {
   }
 }
 
-// Обробка глобальних помилок
-process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Rejection:', reason);
+// ✅ ГЛОБАЛЬНА ОБРОБКА ПОМИЛОК
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Promise Rejection', reason, { 
+    promise: promise.toString(),
+    stack: reason?.stack 
+  });
+  
+  // Не завершуємо процес для unhandled rejections
+  // Краще логувати та продовжувати роботу
 });
 
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  process.exit(1);
+  logger.error('Uncaught Exception - Critical Error', error, {
+    stack: error.stack,
+    memory: process.memoryUsage()
+  });
+  
+  // Для критичних помилок завершуємо процес
+  setTimeout(() => {
+    process.exit(1);
+  }, 1000); // Даємо час на логування
+});
+
+// Обробка помилок Express
+app.use((error, req, res, next) => {
+  logger.error('Express error', error, {
+    url: req.url,
+    method: req.method,
+    body: req.body
+  });
+  
+  if (error instanceof AppError) {
+    res.status(error.statusCode).json({
+      error: error.message,
+      timestamp: error.timestamp,
+      context: error.context
+    });
+  } else {
+    res.status(500).json({
+      error: 'Internal Server Error',
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Запуск
