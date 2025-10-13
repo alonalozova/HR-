@@ -25,7 +25,7 @@ if (!BOT_TOKEN) {
 
 // Попередження про відсутні змінні
 if (!SPREADSHEET_ID) console.warn('⚠️ SPREADSHEET_ID не встановлено');
-if (!HR_CHAT_ID) {
+Кif (!HR_CHAT_ID) {
   console.warn('⚠️ HR_CHAT_ID не встановлено');
   console.warn('📝 Для отримання заявок на відпустку встановіть HR_CHAT_ID в Railway');
 } else {
@@ -40,13 +40,74 @@ let doc;
 // 🧠 AI Система (проста, але працює)
 console.log('✅ AI система активна (проста база знань)');
 
-// 🛡️ ЗАХИСТ ВІД ДУБЛЮВАННЯ
-const processedUpdates = new Set();
-setInterval(() => processedUpdates.clear(), 5 * 60 * 1000);
+// 🛡️ ОПТИМІЗОВАНИЙ ЗАХИСТ ВІД ДУБЛЮВАННЯ
+const processedUpdates = new CacheWithTTL(1000, 2 * 60 * 1000); // 1000 запитів, 2 хвилини
 
-// 💾 КЕШ ДЛЯ ОПТИМІЗАЦІЇ
-const userCache = new Map();
-const registrationCache = new Map();
+// ✅ Оптимізований кеш з TTL та лімітами розміру
+class CacheWithTTL {
+  constructor(maxSize = 1000, ttl = 5 * 60 * 1000) {
+    this.cache = new Map();
+    this.maxSize = maxSize;
+    this.ttl = ttl;
+  }
+  
+  set(key, value) {
+    // Видаляємо найстаріший елемент, якщо досягли ліміту
+    if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    this.cache.set(key, {
+      data: value,
+      timestamp: Date.now()
+    });
+  }
+  
+  get(key) {
+    const item = this.cache.get(key);
+    if (!item) return null;
+    
+    // Перевіряємо TTL
+    if (Date.now() - item.timestamp > this.ttl) {
+      this.cache.delete(key);
+      return null;
+    }
+    return item.data;
+  }
+  
+  has(key) {
+    const item = this.cache.get(key);
+    if (!item) return false;
+    
+    // Перевіряємо TTL
+    if (Date.now() - item.timestamp > this.ttl) {
+      this.cache.delete(key);
+      return false;
+    }
+    return true;
+  }
+  
+  delete(key) {
+    return this.cache.delete(key);
+  }
+  
+  clear() {
+    this.cache.clear();
+  }
+  
+  size() {
+    return this.cache.size;
+  }
+}
+
+// 💾 ОПТИМІЗОВАНИЙ КЕШ
+const userCache = new CacheWithTTL(500, 10 * 60 * 1000); // 500 користувачів, 10 хвилин
+const registrationCache = new CacheWithTTL(100, 15 * 60 * 1000); // 100 реєстрацій, 15 хвилин
+
+// 📊 МОНІТОРИНГ КЕШУ (кожні 10 хвилин)
+setInterval(() => {
+  console.log(`📊 Кеш статистика: userCache=${userCache.size()}, registrationCache=${registrationCache.size()}, processedUpdates=${processedUpdates.size()}`);
+}, 10 * 60 * 1000);
 
 // 🏗️ СТРУКТУРА КОМАНДИ
 const DEPARTMENTS = {
