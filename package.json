@@ -4,7 +4,8 @@
   "description": "Комерційний HR бот для автоматизації HR процесів",
   "main": "server.js",
   "scripts": {
-    "start": "node server_emergency.js",
+    "start": "node HR_Bot_Complete_Ultimate.js",
+    "start:emergency": "node server_emergency.js",
     "start:full": "node HR_Bot_Complete_Ultimate.js",
     "start:modular": "node app.js",
     "start:legacy": "node HR_Bot_Complete_Ultimate.js",
