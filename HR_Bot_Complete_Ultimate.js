@@ -75,7 +75,7 @@ if (!BOT_TOKEN) {
 
 // Попередження про відсутні змінні
 if (!SPREADSHEET_ID) console.warn('⚠️ SPREADSHEET_ID не встановлено');
-Кif (!HR_CHAT_ID) {
+if (!HR_CHAT_ID) {
   console.warn('⚠️ HR_CHAT_ID не встановлено');
   console.warn('📝 Для отримання заявок на відпустку встановіть HR_CHAT_ID в Railway');
 } else {
