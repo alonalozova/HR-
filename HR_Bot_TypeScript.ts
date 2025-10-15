@@ -33,6 +33,8 @@ import {
   DateRange
 } from './types';
 
+import { TypeSafeHelpers } from './utils/type-safe-helpers';
+
 // 🔧 CONFIGURATION
 const config: BotConfig = {
   botToken: process.env.BOT_TOKEN || '',
@@ -668,13 +670,19 @@ class HRBot {
           break;
 
         case 'days':
-          const days = parseInt(text);
-          if (days >= 1 && days <= 7) {
+          const days = TypeSafeHelpers.Number.safeParseInt(text);
+          if (this.validateVacationDays(days)) {
             vacationData.days = days;
             
-            // Calculate end date
-            const endDate = new Date(vacationData.startDate);
-            endDate.setDate(endDate.getDate() + days - 1);
+            // ✅ Безпечне обчислення дати закінчення
+            const endDate = TypeSafeHelpers.Date.addDays(vacationData.startDate, days - 1);
+            if (!endDate) {
+              await this.sendMessage(chatId, 
+                '❌ Помилка обчислення дати закінчення. Спробуйте ще раз.'
+              );
+              break;
+            }
+            
             vacationData.endDate = endDate;
             
             // Process vacation request
@@ -704,12 +712,13 @@ class HRBot {
     const chatId = user.telegramId;
     
     try {
-      // Check vacation conflicts
+      // ✅ Безпечна перевірка конфліктів відпусток
       const conflicts = await this.checkVacationConflicts(
         vacationData.startDate, 
         vacationData.endDate, 
         user.department, 
-        user.team
+        user.team,
+        user.telegramId
       );
       
       if (conflicts.length > 0) {
@@ -804,6 +813,72 @@ class HRBot {
     return undefined;
   }
 
+  private async loadUserFromSheets(userId: number): Promise<User | undefined> {
+    return TypeSafeHelpers.Error.safeExecuteAsync(async () => {
+      if (!this.doc) return undefined;
+
+      const usersSheet = this.doc.sheetsByTitle['Users'];
+      if (!usersSheet) return undefined;
+
+      const rows = await usersSheet.getRows();
+      
+      // ✅ Безпечний пошук користувача
+      const userRow = TypeSafeHelpers.Sheets.safeFindUser(rows, userId);
+      if (!userRow) return undefined;
+
+      // ✅ Безпечне отримання даних
+      const fullName = TypeSafeHelpers.String.safeString(
+        TypeSafeHelpers.Sheets.safeGet(userRow, 'FullName', '')
+      );
+      const department = TypeSafeHelpers.String.safeString(
+        TypeSafeHelpers.Sheets.safeGet(userRow, 'Department', '')
+      );
+      const team = TypeSafeHelpers.String.safeString(
+        TypeSafeHelpers.Sheets.safeGet(userRow, 'Team', '')
+      );
+      const position = TypeSafeHelpers.String.safeString(
+        TypeSafeHelpers.Sheets.safeGet(userRow, 'Position', '')
+      );
+      const workMode = TypeSafeHelpers.String.safeString(
+        TypeSafeHelpers.Sheets.safeGet(userRow, 'WorkMode', 'Office')
+      ) as 'Hybrid' | 'Remote' | 'Office';
+
+      const birthDate = TypeSafeHelpers.Date.safeParseDate(
+        TypeSafeHelpers.Sheets.safeGet(userRow, 'BirthDate', '')
+      );
+      const firstWorkDay = TypeSafeHelpers.Date.safeParseDate(
+        TypeSafeHelpers.Sheets.safeGet(userRow, 'FirstWorkDay', '')
+      );
+
+      if (!birthDate || !firstWorkDay) {
+        this.logger.warn('Invalid date data for user', { userId, birthDate, firstWorkDay });
+        return undefined;
+      }
+
+      const user: User = {
+        telegramId: userId,
+        fullName,
+        department,
+        team,
+        position,
+        birthDate,
+        firstWorkDay,
+        workMode,
+        isRegistered: true,
+        role: {
+          level: 'employee',
+          permissions: this.getDefaultPermissions()
+        },
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      return user;
+    }, undefined, (error) => {
+      this.logger.error('Error in loadUserFromSheets', { userId, error: error.message });
+    });
+  }
+
   private async sendMessage(chatId: number, text: string, options?: any): Promise<void> {
     try {
       await this.bot.sendMessage(chatId, text, options);
@@ -814,60 +889,59 @@ class HRBot {
   }
 
   // 📋 VALIDATION METHODS
-  private validateName(name: string): boolean {
-    const trimmed = name.trim();
-    const words = trimmed.split(/\s+/);
-    return words.length >= 2 && words.every(word => word.length >= 2);
+  private validateName(name: any): boolean {
+    return TypeSafeHelpers.Validation.isValidFullName(name);
   }
 
-  private validateDepartment(department: string): boolean {
+  private validateDepartment(department: any): boolean {
     const validDepartments = [
       'Marketing', 'PPC', 'Target/Kris', 'Target/Lera', 
       'Design', 'SMM', 'Sales', 'HR', 'CEO'
     ];
-    return validDepartments.includes(department);
+    return validDepartments.some(valid => 
+      TypeSafeHelpers.String.safeEquals(department, valid)
+    );
   }
 
-  private validateTeam(team: string): boolean {
+  private validateTeam(team: any): boolean {
     const validTeams = [
       'PPC Team', 'Target/Kris Team', 'Target/Lera Team',
       'Design Team', 'SMM Team', 'Sales Team', 'HR Team', 'CEO'
     ];
-    return validTeams.includes(team);
+    return validTeams.some(valid => 
+      TypeSafeHelpers.String.safeEquals(team, valid)
+    );
   }
 
-  private validatePosition(position: string): boolean {
+  private validatePosition(position: any): boolean {
     const validPositions = [
       'PM', 'PPC Specialist', 'Targetologist', 'Designer', 
       'Head of Design', 'Motion Designer', 'Static Designer', 
       'Video Designer', 'SMM Designer', 'Sales Manager', 
       'HR Manager', 'CEO', 'SMM Head', 'SMM Specialist', 'Producer'
     ];
-    return validPositions.includes(position);
+    return validPositions.some(valid => 
+      TypeSafeHelpers.String.safeEquals(position, valid)
+    );
   }
 
-  private validateWorkMode(mode: string): boolean {
-    return ['Hybrid', 'Remote', 'Office'].includes(mode);
+  private validateWorkMode(mode: any): boolean {
+    const validModes = ['Hybrid', 'Remote', 'Office'];
+    return validModes.some(valid => 
+      TypeSafeHelpers.String.safeEquals(mode, valid)
+    );
   }
 
-  private validateVacationDate(date: Date): boolean {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    
-    return date >= tomorrow;
+  private validateVacationDate(date: any): boolean {
+    return TypeSafeHelpers.Validation.isValidVacationDate(date);
   }
 
-  private parseDate(dateStr: string): Date | null {
-    try {
-      const [day, month, year] = dateStr.split('.').map(Number);
-      if (day && month && year && year >= 1900 && year <= 2100) {
-        return new Date(year, month - 1, day);
-      }
-    } catch (error) {
-      // Invalid date format
-    }
-    return null;
+  private validateVacationDays(days: any): boolean {
+    return TypeSafeHelpers.Validation.isValidVacationDays(days);
+  }
+
+  private parseDate(dateStr: any): Date | null {
+    return TypeSafeHelpers.Date.safeParseDate(dateStr);
   }
 
   private generateRequestId(): string {
@@ -1087,14 +1161,112 @@ class HRBot {
     this.logger.info('Vacation request saved to sheets', { requestId: request.requestId });
   }
 
-  private async checkVacationConflicts(startDate: Date, endDate: Date, department: string, team: string): Promise<any[]> {
-    // Implementation for checking vacation conflicts
-    return [];
+  private async checkVacationConflicts(
+    startDate: Date, 
+    endDate: Date, 
+    department: string, 
+    team: string,
+    excludeUserId?: number
+  ): Promise<any[]> {
+    return TypeSafeHelpers.Error.safeExecuteAsync(async () => {
+      if (!this.doc) return [];
+
+      const vacationsSheet = this.doc.sheetsByTitle['Vacations'];
+      if (!vacationsSheet) return [];
+
+      const rows = await vacationsSheet.getRows();
+      
+      // ✅ Безпечна перевірка конфліктів
+      const conflicts = TypeSafeHelpers.Sheets.safeCheckVacationConflicts(
+        rows,
+        startDate,
+        endDate,
+        department,
+        team,
+        excludeUserId
+      );
+
+      // ✅ Безпечне формування результату
+      return TypeSafeHelpers.Array.safeMap(conflicts, (row) => {
+        const userId = TypeSafeHelpers.Number.safeParseInt(
+          TypeSafeHelpers.Sheets.safeGet(row, 'UserID', '')
+        );
+        const fullName = TypeSafeHelpers.String.safeString(
+          TypeSafeHelpers.Sheets.safeGet(row, 'FullName', '')
+        );
+        const start = TypeSafeHelpers.Date.safeParseDate(
+          TypeSafeHelpers.Sheets.safeGet(row, 'StartDate', '')
+        );
+        const end = TypeSafeHelpers.Date.safeParseDate(
+          TypeSafeHelpers.Sheets.safeGet(row, 'EndDate', '')
+        );
+
+        return {
+          userId,
+          fullName,
+          startDate: start,
+          endDate: end
+        };
+      }).filter(conflict => 
+        conflict.fullName && 
+        conflict.startDate && 
+        conflict.endDate
+      );
+
+    }, [], (error) => {
+      this.logger.error('Error checking vacation conflicts', { 
+        startDate, 
+        endDate, 
+        department, 
+        team, 
+        error: error.message 
+      });
+    });
   }
 
   private async getVacationBalance(userId: number): Promise<any> {
-    // Implementation for getting vacation balance
-    return { remainingDays: 24, usedDays: 0, totalDays: 24 };
+    return TypeSafeHelpers.Error.safeExecuteAsync(async () => {
+      if (!this.doc) {
+        return { remainingDays: 24, usedDays: 0, totalDays: 24 };
+      }
+
+      const balanceSheet = this.doc.sheetsByTitle['VacationBalance'];
+      if (!balanceSheet) {
+        return { remainingDays: 24, usedDays: 0, totalDays: 24 };
+      }
+
+      const rows = await balanceSheet.getRows();
+      
+      // ✅ Безпечний пошук балансу користувача
+      const balanceRow = TypeSafeHelpers.Array.safeFind(rows, (row) => {
+        const rowUserId = TypeSafeHelpers.Number.safeParseInt(
+          TypeSafeHelpers.Sheets.safeGet(row, 'UserID', '')
+        );
+        return rowUserId === userId;
+      });
+
+      if (!balanceRow) {
+        return { remainingDays: 24, usedDays: 0, totalDays: 24 };
+      }
+
+      // ✅ Безпечне отримання балансу
+      const totalDays = TypeSafeHelpers.Number.safeParseInt(
+        TypeSafeHelpers.Sheets.safeGet(balanceRow, 'TotalDays', 24)
+      );
+      const usedDays = TypeSafeHelpers.Number.safeParseInt(
+        TypeSafeHelpers.Sheets.safeGet(balanceRow, 'UsedDays', 0)
+      );
+      const remainingDays = TypeSafeHelpers.Number.safeSubtract(totalDays, usedDays);
+
+      return {
+        totalDays,
+        usedDays,
+        remainingDays: Math.max(0, remainingDays)
+      };
+
+    }, { remainingDays: 24, usedDays: 0, totalDays: 24 }, (error) => {
+      this.logger.error('Error getting vacation balance', { userId, error: error.message });
+    });
   }
 
   private async notifyPMAboutVacationRequest(request: VacationRequest, user: User): Promise<void> {
