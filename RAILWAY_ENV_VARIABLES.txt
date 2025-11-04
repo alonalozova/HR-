@@ -1,0 +1,55 @@
+# 🔑 ПОВНИЙ СПИСОК ENVIRONMENT VARIABLES ДЛЯ RAILWAY
+
+## 📋 СКОПІЮЙТЕ ЦІ ЗНАЧЕННЯ В RAILWAY:
+
+# ============================================
+# TELEGRAM BOT
+# ============================================
+BOT_TOKEN=8160058317:AAGfkWy2gFj81hoC9NSE-Wc-CdiaXZw9Znw
+
+# ============================================
+# GOOGLE SHEETS
+# ============================================
+SPREADSHEET_ID=1aKWAIIeYe39hwaS65k-GAqsaFFhi765DuHoptLtFagg
+
+# ============================================
+# GOOGLE SERVICE ACCOUNT
+# ============================================
+GOOGLE_SERVICE_ACCOUNT_EMAIL=hr-bot-service@polynomial-coda-474619-h6.iam.gserviceaccount.com
+
+GOOGLE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCq93lBlL23AeVo\nHa6MJbDFyM7oYsIOzAen9UMiYvcTcuIA5RSogqQOy/l2YGDsMA99KfuxRbNZm3th\nU/9pJ/tEgU0ewKkMaeQB4idp9la8IptawHhS1vjiwYqd/VnUW9/zfwAPYvILtaRX\nbp5vx/9uuqYs2vdQvadpQlExBxK7lkE5aIPeJMCJiVNufL5zLr+xmi5+sOka2ekm\nQ449yklxc7K5J3TfaLKyv5TXiGO0ofuROP/Azl9P5ltBaubwXUMVFR45TOyOkOxo\nlYTfRs2TcYMfDC5uo8idyccF0yHYn2mg62wDqRV5PIOBAO8TGLcWlqZyGvSX+DIa\nY4/VkJjPAgMBAAECggEAVKxgR5StKRgtUBVzP0HjfPFpWDqhNcbi+9JCv6MYD2/U\ncvEB/DtHmXR4RqKRHijnYuwKFdAZdYXF43xAgQomLdWEJnjwwI8pN62UK6yvZFoX\nayjr7ss9VMDaMEkr1jryfZwmoXg1vIrnq83DdkUtQt/6MTj5R+nGIiGQKKICKxj8\nQ2MOkgdIDZVusuHkKI29wPh6S4rFPrs5V4615h+iSU/kUIgvshmWa2p1SP5lbM6y\nvBjpkHL0M2KniajqoQUJI6ytZ5CuHSeFRdezjdjaqh9N2akVv49vwSpUDrHMqzhw\nN6f+snz9ZqeZAX9ayGjG2MC2bhH0QPSBKIUH88TOMQKBgQDw+k95wyXeskbcJVIu\no5hKf1qWMeucNzJTA74tewyjnsxrJ3m7Q6k7rURn2K/aM/mgR+YQ8SHuXQKGj8gB\nKmYtFsKelw62EhklyifhVqEYNt0hpJaUoQ/gsNk25vo616aR+ETYDwjyMWX4wLu9\nKa5ambY+uBC+0yiw2K4YVIuy6wKBgQC1n+DJ9XhLufiPu77g7yskrdJpVv/xVu3U\nGwsp3BwFkKMKC9SPNHrLrH3mMHVUZaKqa2IgSMSuWu4Xs0n94HfxwSKtqTr3Q677\nd7HiBOHFznQ7rPoT09CkZC0sd3PHXlCxjCknfPb1xlbqVZIPgpIqYHRz6f2Sg5wU\nfDrRhW4QrQKBgEePreZU43wcqRpbIuqivmjxJO+RZ4x+f71TUTikX/5+++meUXIh\nB7KnI7dLC/3ajXjhoRrK4O6uRD+9lwFxm+Ir7iO2bDH5cepc/DbYyQIt2MFS5TzC\nD7sECZ1aPlkXDWovthILdPanYMbcRWRJanORTiOV+bMRdfX+gsTK5ql9AoGAM+bE\nLfJftgQm66wTF+RAx/KENmYOLcFRpVM1FXk46L40WSKYU3QDw0A/mhAu9zc0DM8y\n81bYHZsOfudVNZ93pzYx2r6Jgy9sSaAizRvoCMa+oG8F57SX4uJdpl9cTpS9Kn+L\nIyWqzQEoxT4+xv/hFQsLPDSZqczCRXhatpUSpuECgYA5l6MbsfF33UayEHeu1TXe\nO77qLjqvs+ajMbc974Oo/NQkhjGz2pnBFGonSSf5qU+l0Zscb4hdQOYBEYAWHIl6\nEsBWZ63/By3jQXZATtvBYFe/5VbtZxaA824X9ketwrXyyBQ3PDwEzoh8KepaOMXF\nqedyVNXmDt0fZOI+yFnDpg==\n-----END PRIVATE KEY-----\n
+
+# ============================================
+# HR CHAT
+# ============================================
+HR_CHAT_ID=7304993062
+
+# ============================================
+# SERVER CONFIGURATION
+# ============================================
+NODE_ENV=production
+PORT=3000
+
+# ============================================
+# WEBHOOK URL (додайте після деплою в Railway)
+# ============================================
+# WEBHOOK_URL=https://your-app-name.up.railway.app
+
+# ============================================
+# ІНСТРУКЦІЇ:
+# ============================================
+# 1. Зайдіть на https://railway.app
+# 2. Створіть новий проект з GitHub repo: alonalozova/HR-
+# 3. В розділі Variables додайте ВСІ змінні вище (крім закоментованих #)
+# 4. Після деплою отримаєте URL - додайте його як WEBHOOK_URL
+# 5. Railway автоматично перезапустить додаток
+# 6. Протестуйте бота в Telegram: /start
+
+# ============================================
+# ВАЖЛИВО:
+# ============================================
+# - Копіюйте GOOGLE_PRIVATE_KEY ТОЧНО з \n
+# - НЕ додавайте зайві лапки
+# - Кожна змінна на окремому рядку
+# - Після додавання WEBHOOK_URL бот готовий до роботи!
+

@@ -1,0 +1,55 @@
+{
+  "name": "hr-bot-commercial-typescript",
+  "version": "4.0.0",
+  "description": "Комерційний HR бот для автоматизації HR процесів - TypeScript версія",
+  "main": "dist/HR_Bot_TypeScript.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/HR_Bot_TypeScript.js",
+    "start:dev": "ts-node HR_Bot_TypeScript.ts",
+    "start:ts": "npm run build && npm start",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "start:emergency": "node server_emergency.js",
+    "start:full": "node HR_Bot_Complete_Ultimate.js",
+    "start:hybrid": "node server_hybrid.js",
+    "start:modular": "node app.js",
+    "start:legacy": "node HR_Bot_Complete_Ultimate.js",
+    "start:minimal": "node server_minimal_debug.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "hr",
+    "automation",
+    "typescript",
+    "commercial"
+  ],
+  "author": "Люди.Digital",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "google-spreadsheet": "^4.1.2",
+    "google-auth-library": "^9.6.3",
+    "dotenv": "^16.3.1",
+    "express-rate-limit": "^7.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/express": "^4.17.21",
+    "@types/node-telegram-bot-api": "^0.64.7",
+    "typescript": "^5.3.0",
+    "ts-node": "^10.9.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+
