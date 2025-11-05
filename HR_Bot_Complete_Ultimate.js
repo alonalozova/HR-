@@ -322,22 +322,46 @@ app.post('/webhook', async (req, res) => {
   try {
     const update = req.body;
     
-    if (!update || processedUpdates.has(update.update_id)) {
+    // Логування для діагностики
+    console.log('📨 Webhook отримано:', JSON.stringify({
+      update_id: update?.update_id,
+      has_message: !!update?.message,
+      has_callback: !!update?.callback_query,
+      message_text: update?.message?.text
+    }));
+    
+    if (!update) {
+      console.log('⚠️ Порожній update');
       return res.status(200).send('OK');
     }
     
-    processedUpdates.add(update.update_id);
+    // Перевірка на дублювання
+    const updateIdStr = String(update.update_id);
+    if (processedUpdates.has(updateIdStr)) {
+      console.log('⚠️ Дублікат update_id:', updateIdStr);
+      return res.status(200).send('OK');
+    }
     
+    // Додаємо в кеш (використовуємо set, а не add!)
+    processedUpdates.set(updateIdStr, true);
+    
+    // Обробка повідомлення
     if (update.message) {
+      console.log('📝 Обробка повідомлення від:', update.message.from?.id);
       await processMessage(update.message);
     } else if (update.callback_query) {
+      console.log('🔘 Обробка callback від:', update.callback_query.from?.id);
       await processCallback(update.callback_query);
+    } else {
+      console.log('⚠️ Невідомий тип update:', Object.keys(update));
     }
     
     res.status(200).send('OK');
   } catch (error) {
     console.error('❌ Webhook error:', error);
-    res.status(500).send('Error');
+    console.error('❌ Stack:', error.stack);
+    // Відправляємо OK навіть при помилці, щоб Telegram не повторював запит
+    res.status(200).send('OK');
   }
 });
 
@@ -353,17 +377,24 @@ async function processMessage(message) {
     
     console.log(`📨 Повідомлення від ${telegramId}: ${text}`);
     
-    // Перевірка на дублювання
-    const messageKey = `${telegramId}_${text}_${Date.now()}`;
-    if (processedUpdates.has(messageKey)) return;
-    processedUpdates.add(messageKey);
+    // Перевірка на дублювання (використовуємо update_id з webhook, тут не потрібно)
     
     if (text === '/start') {
-      const user = await getUserInfo(telegramId);
-      if (!user) {
-        await showWelcomeMessage(chatId, telegramId, username, firstName, lastName);
-      } else {
-        await showMainMenu(chatId, telegramId);
+      console.log('🟢 Обробка команди /start для користувача:', telegramId);
+      try {
+        const user = await getUserInfo(telegramId);
+        console.log('👤 Користувач знайдено:', user ? 'так' : 'ні');
+        if (!user) {
+          console.log('📝 Показуємо welcome message');
+          await showWelcomeMessage(chatId, telegramId, username, firstName, lastName);
+        } else {
+          console.log('📋 Показуємо головне меню');
+          await showMainMenu(chatId, telegramId);
+        }
+      } catch (error) {
+        console.error('❌ Помилка обробки /start:', error);
+        console.error('❌ Stack:', error.stack);
+        await sendMessage(chatId, '❌ Помилка при обробці команди. Спробуйте ще раз.');
       }
       return;
     }
@@ -2567,11 +2598,24 @@ async function startServer() {
     
     // Встановлення webhook в фоні (неблокуюче)
     if (WEBHOOK_URL) {
-      bot.setWebHook(`${WEBHOOK_URL}/webhook`)
-        .then(() => console.log('✅ Webhook встановлено:', WEBHOOK_URL))
-        .catch(error => console.error('❌ Помилка webhook:', error));
+      const webhookUrl = `${WEBHOOK_URL}/webhook`;
+      console.log('🔧 Встановлення webhook на URL:', webhookUrl);
+      bot.setWebHook(webhookUrl)
+        .then(() => {
+          console.log('✅ Webhook встановлено успішно:', webhookUrl);
+          // Перевірка webhook
+          return bot.getWebHookInfo();
+        })
+        .then(info => {
+          console.log('📊 Webhook info:', JSON.stringify(info, null, 2));
+        })
+        .catch(error => {
+          console.error('❌ Помилка встановлення webhook:', error);
+          console.error('❌ Stack:', error.stack);
+        });
     } else {
-      console.warn('⚠️ WEBHOOK_URL не встановлено');
+      console.warn('⚠️ WEBHOOK_URL не встановлено в environment variables!');
+      console.warn('⚠️ Бот не зможе отримувати повідомлення без webhook!');
     }
     
   } catch (error) {
