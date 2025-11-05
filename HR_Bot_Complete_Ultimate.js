@@ -2334,10 +2334,35 @@ async function handleVacationProcess(chatId, telegramId, text) {
         return true;
       }
       
+      // Для екстреної відпустки дозволяємо дати в минулому (для ретроспективного оформлення)
+      // Але попереджаємо користувача
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      startDate.setHours(0, 0, 0, 0);
+      
+      if (startDate < today) {
+        await sendMessage(chatId, `⚠️ <b>Увага!</b> Ви вказали дату в минулому (${text}). Екстрена відпустка може бути зафіксована ретроспективно. Продовжити?`);
+        regData.step = 'emergency_vacation_confirm_past_date';
+        regData.data.startDate = startDate;
+        return true;
+      }
+      
       regData.data.startDate = startDate;
       regData.step = 'emergency_vacation_days';
       await sendMessage(chatId, `📅 <b>Дата початку:</b> ${text}\n\n📊 <b>Вкажіть кількість днів відпустки</b>\n\nВведіть кількість днів (1-7):`);
       return true;
+    }
+    
+    if (regData.step === 'emergency_vacation_confirm_past_date') {
+      if (text.toLowerCase().includes('так') || text.toLowerCase().includes('yes') || text === '✅' || text === '1') {
+        regData.step = 'emergency_vacation_days';
+        await sendMessage(chatId, `📅 <b>Дата початку:</b> ${formatDate(regData.data.startDate)}\n\n📊 <b>Вкажіть кількість днів відпустки</b>\n\nВведіть кількість днів (1-7):`);
+        return true;
+      } else {
+        await sendMessage(chatId, '❌ Заявку скасовано. Почніть спочатку.');
+        registrationCache.delete(telegramId);
+        return true;
+      }
     }
     
     if (regData.step === 'emergency_vacation_days') {
