@@ -437,6 +437,21 @@ async function processMessage(message) {
       return;
     }
     
+    // Обробка спізнень
+    if (await handleLateProcess(chatId, telegramId, text)) {
+      return;
+    }
+    
+    // Обробка Remote
+    if (await handleRemoteProcess(chatId, telegramId, text)) {
+      return;
+    }
+    
+    // Обробка лікарняного
+    if (await handleSickProcess(chatId, telegramId, text)) {
+      return;
+    }
+    
     // Обробка реєстрації
     if (registrationCache.has(telegramId)) {
       await handleRegistrationStep(chatId, telegramId, text);
@@ -1164,6 +1179,38 @@ async function showVacationForm(chatId, telegramId) {
   }
 }
 
+// 🚨 ФОРМА ЕКСТРЕНОЇ ВІДПУСТКИ
+async function showEmergencyVacationForm(chatId, telegramId) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
+      return;
+    }
+
+    const text = `🚨 <b>Екстрена відпустка</b>
+
+👤 <b>Співробітник:</b> ${user.fullName}
+🏢 <b>Відділ:</b> ${user.department}
+👥 <b>Команда:</b> ${user.team}
+
+⚠️ <b>Увага!</b> Екстрена відпустка дозволяє взяти відпустку без попередження заздалегідь.
+
+<b>Введіть дату початку відпустки:</b>
+📅 <b>Дата початку</b> (ДД.ММ.РРРР):`;
+
+    // Збережемо стан форми
+    registrationCache.set(telegramId, {
+      step: 'emergency_vacation_start_date',
+      data: { type: 'emergency_vacation' }
+    });
+
+    await sendMessage(chatId, text);
+  } catch (error) {
+    console.error('❌ Помилка showEmergencyVacationForm:', error);
+  }
+}
+
 // 🏠 МЕНЮ REMOTE
 async function showRemoteMenu(chatId, telegramId) {
   try {
@@ -1172,13 +1219,11 @@ async function showRemoteMenu(chatId, telegramId) {
     
     const text = `🏠 <b>Remote робота</b>
 
-📊 <b>Статистика за місяць:</b>
-• Використано: ${stats.used}/14 днів
-• Доступно: ${stats.available} днів
+📊 <b>Статистика за поточний місяць:</b>
+• Використано днів: ${stats.used}
 
 <b>Правила:</b>
-• Ліміт: 14 днів/місяць (офлайн/гібрид)
-• Повідомляти до 11:00
+• Повідомляти до 19:00 дня передуючого залишенню вдома
 • Автоматичне затвердження
 
 Оберіть дію:`;
@@ -1211,14 +1256,14 @@ async function showLateMenu(chatId, telegramId) {
     
     const text = `⏰ <b>Спізнення</b>
 
-📊 <b>Статистика за місяць:</b>
+📊 <b>Статистика за поточний місяць:</b>
 • Спізнень: ${stats.count}/7 (ліміт)
 • Попередження: ${stats.warnings}
 
 <b>Правила:</b>
-• Спізнення з 10:21
+• Спізнення рахується з 11:01
 • 7 спізнень/місяць = попередження
-• Повідомляти HR + PM
+• Повідомляти PM і HR (якщо немає PM - одразу HR)
 
 Оберіть дію:`;
 
@@ -1636,57 +1681,18 @@ async function checkIfNewEmployee(telegramId) {
 
 async function getRemoteStats(telegramId) {
   try {
-    if (!doc) return { used: 0, available: 14 };
-    
-    await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Remote'];
-    if (!sheet) return { used: 0, available: 14 };
-    
-    const rows = await sheet.getRows();
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
-    
-    const userRemote = rows.filter(row => 
-      row.get('TelegramID') == telegramId && 
-      row.get('Status') === 'Approved' &&
-      new Date(row.get('Date')).getMonth() === currentMonth &&
-      new Date(row.get('Date')).getFullYear() === currentYear
-    );
-    
-    return {
-      used: userRemote.length,
-      available: 14 - userRemote.length
-    };
+    return await getRemoteStatsForCurrentMonth(telegramId);
   } catch (error) {
     console.error('❌ Помилка getRemoteStats:', error);
-    return { used: 0, available: 14 };
+    return { used: 0 };
   }
 }
 
 async function getLateStats(telegramId) {
   try {
-    if (!doc) return { count: 0, warnings: 0 };
-    
-    await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Late'];
-    if (!sheet) return { count: 0, warnings: 0 };
-    
-    const rows = await sheet.getRows();
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
-    
-    const userLate = rows.filter(row => 
-      row.get('TelegramID') == telegramId && 
-      new Date(row.get('Date')).getMonth() === currentMonth &&
-      new Date(row.get('Date')).getFullYear() === currentYear
-    );
-    
-    const warnings = Math.floor(userLate.length / 7);
-    
-    return {
-      count: userLate.length,
-      warnings: warnings
-    };
+    const stats = await getLateStatsForCurrentMonth(telegramId);
+    const warnings = Math.floor(stats.count / 7);
+    return { count: stats.count, warnings };
   } catch (error) {
     console.error('❌ Помилка getLateStats:', error);
     return { count: 0, warnings: 0 };
@@ -1695,26 +1701,7 @@ async function getLateStats(telegramId) {
 
 async function getSickStats(telegramId) {
   try {
-    if (!doc) return { days: 0, count: 0 };
-    
-    await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Sick'];
-    if (!sheet) return { days: 0, count: 0 };
-    
-    const rows = await sheet.getRows();
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
-    
-    const userSick = rows.filter(row => 
-      row.get('TelegramID') == telegramId && 
-      new Date(row.get('Date')).getMonth() === currentMonth &&
-      new Date(row.get('Date')).getFullYear() === currentYear
-    );
-    
-    return {
-      days: userSick.length,
-      count: userSick.length
-    };
+    return await getSickStatsForCurrentMonth(telegramId);
   } catch (error) {
     console.error('❌ Помилка getSickStats:', error);
     return { days: 0, count: 0 };
@@ -2189,6 +2176,58 @@ async function handleVacationProcess(chatId, telegramId, text) {
     console.log('🔍 handleVacationProcess:', { telegramId, hasRegData: !!regData, step: regData?.step, text });
     if (!regData) return false;
     
+    // Обробка екстреної відпустки
+    if (regData.step === 'emergency_vacation_start_date') {
+      const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+      const match = text.match(dateRegex);
+      
+      if (!match) {
+        await sendMessage(chatId, '❌ Невірний формат дати. Використовуйте ДД.ММ.РРРР (наприклад: 11.11.2025)');
+        return true;
+      }
+      
+      const day = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const year = parseInt(match[3]);
+      
+      const startDate = new Date(year, month - 1, day);
+      if (startDate.getDate() !== day || startDate.getMonth() !== month - 1 || startDate.getFullYear() !== year) {
+        await sendMessage(chatId, '❌ Невірна дата. Перевірте правильність введених даних.');
+        return true;
+      }
+      
+      regData.data.startDate = startDate;
+      regData.step = 'emergency_vacation_days';
+      await sendMessage(chatId, `📅 <b>Дата початку:</b> ${text}\n\n📊 <b>Вкажіть кількість днів відпустки</b>\n\nВведіть кількість днів (1-7):`);
+      return true;
+    }
+    
+    if (regData.step === 'emergency_vacation_days') {
+      const days = parseInt(text);
+      
+      if (isNaN(days) || days < 1 || days > 7) {
+        await sendMessage(chatId, '❌ Кількість днів має бути від 1 до 7.');
+        return true;
+      }
+      
+      regData.data.days = days;
+      regData.step = 'emergency_vacation_reason';
+      await sendMessage(chatId, `📊 <b>Кількість днів:</b> ${days}\n\n🔒 <b>ВАЖЛИВО! Конфіденційна інформація</b>\n\n📝 <b>Опишіть причину екстреної відпустки:</b>\n\n⚠️ Ця інформація буде доступна тільки HR і CEO агенції.`);
+      return true;
+    }
+    
+    if (regData.step === 'emergency_vacation_reason') {
+      if (!text || text.trim().length < 10) {
+        await sendMessage(chatId, '❌ Будь ласка, опишіть причину більш детально (мінімум 10 символів).');
+        return true;
+      }
+      
+      regData.data.reason = text.trim();
+      await processEmergencyVacationRequest(chatId, telegramId, regData.data);
+      registrationCache.delete(telegramId);
+      return true;
+    }
+    
     if (regData.step === 'vacation_start_date') {
       // Перевіряємо формат дати
       const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
@@ -2246,6 +2285,58 @@ async function handleVacationProcess(chatId, telegramId, text) {
   } catch (error) {
     console.error('❌ Помилка handleVacationProcess:', error);
     return false;
+  }
+}
+
+// Обробка екстреної відпустки
+/**
+ * Обробляє екстрену заявку на відпустку - відправляє тільки HR
+ * @param {number} chatId - ID чату
+ * @param {number} telegramId - Telegram ID користувача
+ * @param {Partial<VacationRequest>} vacationData - Дані заявки (startDate, days, reason)
+ * @returns {Promise<void>}
+ */
+async function processEmergencyVacationRequest(chatId, telegramId, vacationData) {
+  try {
+    logger.info('Processing emergency vacation request', { telegramId, vacationData });
+    
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      throw new ValidationError('Користувач не знайдений. Пройдіть реєстрацію.', 'user');
+    }
+    
+    const { startDate, days, reason } = vacationData;
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + days - 1);
+    
+    // Зберігаємо заявку в таблицю з типом emergency
+    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days, 'pending_hr', null, 'emergency', reason);
+    
+    // Відправляємо тільки HR з інформацією про екстрену відпустку
+    await notifyHRAboutEmergencyVacation(user, requestId, startDate, endDate, days, reason);
+    
+    // Підтвердження користувачу
+    await sendMessage(chatId, `✅ <b>Екстрена заявка на відпустку відправлена!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n\n⏳ Заявка відправлена напряму HR для розгляду. Ви отримаєте відповідь найближчим часом.`);
+    
+    // Логування
+    await logUserData(telegramId, 'emergency_vacation_request', {
+      requestId,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      days,
+      hasReason: !!reason,
+      department: user.department,
+      team: user.team
+    });
+    
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      logger.warn('Validation error in emergency vacation request', { telegramId, error: error.message });
+      await sendMessage(chatId, `❌ ${error.message}`);
+    } else {
+      logger.error('Unexpected error in emergency vacation request', error, { telegramId });
+      await sendMessage(chatId, '❌ Помилка обробки заявки. Спробуйте пізніше або зверніться до HR.');
+    }
   }
 }
 
@@ -2403,7 +2494,7 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
  * @param {number} days - Кількість днів відпустки
  * @returns {Promise<string>} ID збереженої заявки
  */
-async function saveVacationRequest(telegramId, user, startDate, endDate, days, status = 'pending_pm', pm = null) {
+async function saveVacationRequest(telegramId, user, startDate, endDate, days, status = 'pending_pm', pm = null, requestType = 'regular', reason = '') {
   try {
     if (!doc) throw new Error('Google Sheets не підключено');
     
@@ -2414,7 +2505,7 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
         title: 'Vacations',
         headerValues: [
           'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'PM',
-          'StartDate', 'EndDate', 'Days', 'Status', 'CreatedAt', 'ApprovedBy', 'ApprovedAt'
+          'StartDate', 'EndDate', 'Days', 'Status', 'RequestType', 'Reason', 'CreatedAt', 'ApprovedBy', 'ApprovedAt'
         ]
       });
     }
@@ -2433,12 +2524,14 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
       EndDate: endDate.toISOString().split('T')[0],
       Days: days,
       Status: status,
+      RequestType: requestType,
+      Reason: reason || '',
       CreatedAt: new Date().toISOString(),
       ApprovedBy: '',
       ApprovedAt: ''
     });
     
-    console.log(`✅ Збережено заявку на відпустку: ${requestId}, статус: ${status}`);
+    console.log(`✅ Збережено заявку на відпустку: ${requestId}, статус: ${status}, тип: ${requestType}`);
     return requestId;
   } catch (error) {
     console.error('❌ Помилка saveVacationRequest:', error);
@@ -2556,6 +2649,58 @@ async function notifyHRAboutVacationRequest(user, requestId, startDate, endDate,
   }
 }
 
+// Повідомлення HR про екстрену відпустку
+/**
+ * Відправляє повідомлення HR про екстрену відпустку з конфіденційною інформацією
+ * @param {User} user - Об'єкт користувача
+ * @param {string} requestId - ID заявки
+ * @param {Date} startDate - Дата початку
+ * @param {Date} endDate - Дата закінчення
+ * @param {number} days - Кількість днів
+ * @param {string} reason - Причина (конфіденційна)
+ * @returns {Promise<void>}
+ */
+async function notifyHRAboutEmergencyVacation(user, requestId, startDate, endDate, days, reason) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    let message = `🚨 <b>ЕКСТРЕНА ВІДПУСТКА</b>\n\n`;
+    message += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
+    message += `🏢 <b>Відділ:</b> ${user.department}\n`;
+    message += `👥 <b>Команда:</b> ${user.team}\n`;
+    message += `📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n`;
+    message += `📊 <b>Днів:</b> ${days}\n`;
+    message += `🆔 <b>ID заявки:</b> ${requestId}\n\n`;
+    message += `🔒 <b>КОНФІДЕНЦІЙНА ІНФОРМАЦІЯ</b>\n`;
+    message += `📝 <b>Причина:</b> ${reason}\n\n`;
+    message += `⚠️ Ця інформація доступна тільки HR і CEO агенції.\n\n`;
+    message += `⏳ <b>Потребує негайного розгляду</b>`;
+    
+    // Створюємо клавіатуру з кнопками для HR
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Підтвердити', callback_data: `vacation_hr_approve_${requestId}` },
+          { text: '❌ Відхилити', callback_data: `vacation_hr_reject_${requestId}` }
+        ]
+      ]
+    };
+    
+    await sendMessage(HR_CHAT_ID, message, keyboard);
+    
+    // Логування
+    await logUserData(user.telegramId, 'emergency_vacation_hr_notification', {
+      requestId,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      days,
+      hasReason: !!reason
+    });
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutEmergencyVacation:', error);
+  }
+}
+
 // Повідомлення HR про конфлікт
 async function notifyHRAboutConflict(user, conflicts, startDate, endDate) {
   try {
@@ -2663,7 +2808,7 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
 }
 
 // Збереження спізнення
-async function saveLateRecord(telegramId, user, date, reason = '') {
+async function saveLateRecord(telegramId, user, date, reason = '', time = '') {
   try {
     if (!doc) return;
     
@@ -2673,7 +2818,7 @@ async function saveLateRecord(telegramId, user, date, reason = '') {
       sheet = await doc.addSheet({
         title: 'Lates',
         headerValues: [
-          'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Reason', 'CreatedAt'
+          'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Time', 'Reason', 'CreatedAt'
         ]
       });
     }
@@ -2684,11 +2829,12 @@ async function saveLateRecord(telegramId, user, date, reason = '') {
       Department: user.department,
       Team: user.team,
       Date: date.toISOString().split('T')[0],
+      Time: time,
       Reason: reason,
       CreatedAt: new Date().toISOString()
     });
     
-    console.log(`✅ Збережено спізнення: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+    console.log(`✅ Збережено спізнення: ${user.fullName} - ${date.toISOString().split('T')[0]} ${time}`);
   } catch (error) {
     console.error('❌ Помилка saveLateRecord:', error);
   }
@@ -2807,6 +2953,482 @@ async function logUserData(telegramId, action, data = {}) {
     console.log(`📝 Logged: ${telegramId} - ${action}`);
   } catch (error) {
     console.error('❌ Помилка logUserData:', error);
+  }
+}
+
+// ⏰ ОБРОБКА СПІЗНЕНЬ
+async function handleLateProcess(chatId, telegramId, text) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) return false;
+    
+    if (regData.step === 'late_date') {
+      const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+      const match = text.match(dateRegex);
+      if (!match) {
+        await sendMessage(chatId, '❌ Невірний формат дати. Використовуйте ДД.ММ.РРРР');
+        return true;
+      }
+      const day = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const year = parseInt(match[3]);
+      const date = new Date(year, month - 1, day);
+      if (date.getDate() !== day || date.getMonth() !== month - 1 || date.getFullYear() !== year) {
+        await sendMessage(chatId, '❌ Невірна дата.');
+        return true;
+      }
+      regData.data.date = date;
+      regData.step = 'late_time';
+      await sendMessage(chatId, '⏰ <b>О котрій годині ви почнете працювати?</b>\n\nВведіть час у форматі ГГ:ХХ (наприклад: 12:30):');
+      return true;
+    }
+    
+    if (regData.step === 'late_time') {
+      const timeRegex = /^(\d{1,2}):(\d{2})$/;
+      const match = text.match(timeRegex);
+      if (!match) {
+        await sendMessage(chatId, '❌ Невірний формат часу. Використовуйте ГГ:ХХ (наприклад: 12:30)');
+        return true;
+      }
+      regData.data.time = text;
+      regData.step = 'late_reason';
+      await sendMessage(chatId, '📝 <b>Вкажіть причину спізнення:</b>');
+      return true;
+    }
+    
+    if (regData.step === 'late_reason') {
+      if (!text || text.trim().length < 3) {
+        await sendMessage(chatId, '❌ Будь ласка, вкажіть причину (мінімум 3 символи).');
+        return true;
+      }
+      regData.data.reason = text.trim();
+      await processLateReport(chatId, telegramId, regData.data);
+      registrationCache.delete(telegramId);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('❌ Помилка handleLateProcess:', error);
+    return false;
+  }
+}
+
+async function reportLate(chatId, telegramId) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений.');
+      return;
+    }
+    
+    registrationCache.set(telegramId, {
+      step: 'late_date',
+      data: {}
+    });
+    
+    await sendMessage(chatId, '⏰ <b>Повідомлення про спізнення</b>\n\n📅 <b>Вкажіть дату спізнення</b> (ДД.ММ.РРРР):\n\nЯкщо спізнення сьогодні, введіть сьогоднішню дату.');
+  } catch (error) {
+    console.error('❌ Помилка reportLate:', error);
+  }
+}
+
+async function processLateReport(chatId, telegramId, lateData) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      throw new ValidationError('Користувач не знайдений.', 'user');
+    }
+    
+    const { date, time, reason } = lateData;
+    const recordId = await saveLateRecord(telegramId, user, date, reason, time);
+    
+    // Перевіряємо чи є PM
+    const pm = await getPMForUser(user);
+    if (pm) {
+      await notifyPMAboutLate(user, date, time, reason);
+    }
+    await notifyHRAboutLate(user, date, time, reason, pm !== null);
+    
+    await sendMessage(chatId, `✅ <b>Повідомлення про спізнення відправлено!</b>\n\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку роботи:</b> ${time}\n📝 <b>Причина:</b> ${reason}`);
+  } catch (error) {
+    console.error('❌ Помилка processLateReport:', error);
+    await sendMessage(chatId, '❌ Помилка обробки спізнення.');
+  }
+}
+
+async function notifyPMAboutLate(user, date, time, reason) {
+  try {
+    const pm = await getPMForUser(user);
+    if (!pm || !pm.telegramId) return;
+    
+    const message = `⏰ <b>Спізнення</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку:</b> ${time}\n📝 <b>Причина:</b> ${reason}`;
+    await sendMessage(pm.telegramId, message);
+  } catch (error) {
+    console.error('❌ Помилка notifyPMAboutLate:', error);
+  }
+}
+
+async function notifyHRAboutLate(user, date, time, reason, hasPM) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    const message = `⏰ <b>ПОВІДОМЛЕННЯ ПРО СПІЗНЕННЯ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку роботи:</b> ${time}\n📝 <b>Причина:</b> ${reason}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
+    await sendMessage(HR_CHAT_ID, message);
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutLate:', error);
+  }
+}
+
+async function showLateStats(chatId, telegramId) {
+  try {
+    const stats = await getLateStatsForCurrentMonth(telegramId);
+    const text = `📊 <b>Статистика спізнень за поточний місяць</b>\n\n⏰ <b>Кількість спізнень:</b> ${stats.count}\n⚠️ <b>Ліміт:</b> 7 спізнень/місяць\n\n${stats.count >= 7 ? '⚠️ Досягнуто ліміт спізнень!' : `✅ Залишилось: ${7 - stats.count}`}`;
+    await sendMessage(chatId, text);
+  } catch (error) {
+    console.error('❌ Помилка showLateStats:', error);
+  }
+}
+
+async function getLateStatsForCurrentMonth(telegramId) {
+  try {
+    if (!doc) return { count: 0 };
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Lates'];
+    if (!sheet) return { count: 0 };
+    
+    const rows = await sheet.getRows();
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    const userLate = rows.filter(row => {
+      if (row.get('TelegramID') != telegramId) return false;
+      const rowDate = new Date(row.get('Date'));
+      return rowDate.getMonth() === currentMonth && rowDate.getFullYear() === currentYear;
+    });
+    
+    return { count: userLate.length };
+  } catch (error) {
+    console.error('❌ Помилка getLateStatsForCurrentMonth:', error);
+    return { count: 0 };
+  }
+}
+
+// 🏠 ОБРОБКА REMOTE
+async function handleRemoteProcess(chatId, telegramId, text) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) return false;
+    
+    if (regData.step === 'remote_date') {
+      const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+      const match = text.match(dateRegex);
+      if (!match) {
+        await sendMessage(chatId, '❌ Невірний формат дати. Використовуйте ДД.ММ.РРРР');
+        return true;
+      }
+      const day = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const year = parseInt(match[3]);
+      const date = new Date(year, month - 1, day);
+      if (date.getDate() !== day || date.getMonth() !== month - 1 || date.getFullYear() !== year) {
+        await sendMessage(chatId, '❌ Невірна дата.');
+        return true;
+      }
+      
+      // Перевірка: повідомлення має бути до 19:00 попереднього дня
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      if (date < tomorrow) {
+        await sendMessage(chatId, '⚠️ Повідомлення про Remote має бути до 19:00 дня передуючого залишенню вдома.');
+        return true;
+      }
+      
+      regData.data.date = date;
+      await processRemoteRequest(chatId, telegramId, regData.data);
+      registrationCache.delete(telegramId);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('❌ Помилка handleRemoteProcess:', error);
+    return false;
+  }
+}
+
+async function setRemoteToday(chatId, telegramId) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений.');
+      return;
+    }
+    
+    registrationCache.set(telegramId, {
+      step: 'remote_date',
+      data: { type: 'today' }
+    });
+    
+    await sendMessage(chatId, '🏠 <b>Remote робота</b>\n\n📅 <b>Вкажіть дату Remote роботи</b> (ДД.ММ.РРРР):\n\n⚠️ Повідомлення має бути до 19:00 дня передуючого залишенню вдома.');
+  } catch (error) {
+    console.error('❌ Помилка setRemoteToday:', error);
+  }
+}
+
+async function processRemoteRequest(chatId, telegramId, remoteData) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      throw new ValidationError('Користувач не знайдений.', 'user');
+    }
+    
+    const { date } = remoteData;
+    await saveRemoteRecord(telegramId, user, date);
+    
+    // Перевіряємо чи є PM
+    const pm = await getPMForUser(user);
+    if (pm) {
+      await notifyPMAboutRemote(user, date);
+    }
+    await notifyHRAboutRemote(user, date, pm !== null);
+    
+    await sendMessage(chatId, `✅ <b>Повідомлення про Remote роботу відправлено!</b>\n\n📅 <b>Дата:</b> ${formatDate(date)}`);
+  } catch (error) {
+    console.error('❌ Помилка processRemoteRequest:', error);
+    await sendMessage(chatId, '❌ Помилка обробки Remote запиту.');
+  }
+}
+
+async function notifyPMAboutRemote(user, date) {
+  try {
+    const pm = await getPMForUser(user);
+    if (!pm || !pm.telegramId) return;
+    
+    const message = `🏠 <b>Remote робота</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}`;
+    await sendMessage(pm.telegramId, message);
+  } catch (error) {
+    console.error('❌ Помилка notifyPMAboutRemote:', error);
+  }
+}
+
+async function notifyHRAboutRemote(user, date, hasPM) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    const message = `🏠 <b>REMOTE РОБОТА</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
+    await sendMessage(HR_CHAT_ID, message);
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutRemote:', error);
+  }
+}
+
+async function showRemoteCalendar(chatId, telegramId) {
+  try {
+    await sendMessage(chatId, '📅 Календар Remote роботи в розробці.');
+  } catch (error) {
+    console.error('❌ Помилка showRemoteCalendar:', error);
+  }
+}
+
+async function showRemoteStats(chatId, telegramId) {
+  try {
+    const stats = await getRemoteStatsForCurrentMonth(telegramId);
+    const text = `📊 <b>Статистика Remote роботи за поточний місяць</b>\n\n🏠 <b>Використано днів:</b> ${stats.used}`;
+    await sendMessage(chatId, text);
+  } catch (error) {
+    console.error('❌ Помилка showRemoteStats:', error);
+  }
+}
+
+async function getRemoteStatsForCurrentMonth(telegramId) {
+  try {
+    if (!doc) return { used: 0 };
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Remotes'];
+    if (!sheet) return { used: 0 };
+    
+    const rows = await sheet.getRows();
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    const userRemote = rows.filter(row => {
+      if (row.get('TelegramID') != telegramId) return false;
+      const rowDate = new Date(row.get('Date'));
+      return rowDate.getMonth() === currentMonth && rowDate.getFullYear() === currentYear;
+    });
+    
+    return { used: userRemote.length };
+  } catch (error) {
+    console.error('❌ Помилка getRemoteStatsForCurrentMonth:', error);
+    return { used: 0 };
+  }
+}
+
+// 🏥 ОБРОБКА ЛІКАРНЯНОГО
+async function handleSickProcess(chatId, telegramId, text) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) return false;
+    
+    if (regData.step === 'sick_date') {
+      const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+      const match = text.match(dateRegex);
+      if (!match) {
+        await sendMessage(chatId, '❌ Невірний формат дати. Використовуйте ДД.ММ.РРРР');
+        return true;
+      }
+      const day = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const year = parseInt(match[3]);
+      const date = new Date(year, month - 1, day);
+      if (date.getDate() !== day || date.getMonth() !== month - 1 || date.getFullYear() !== year) {
+        await sendMessage(chatId, '❌ Невірна дата.');
+        return true;
+      }
+      regData.data.date = date;
+      await processSickReport(chatId, telegramId, regData.data);
+      registrationCache.delete(telegramId);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('❌ Помилка handleSickProcess:', error);
+    return false;
+  }
+}
+
+async function reportSick(chatId, telegramId) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений.');
+      return;
+    }
+    
+    registrationCache.set(telegramId, {
+      step: 'sick_date',
+      data: {}
+    });
+    
+    await sendMessage(chatId, '🏥 <b>Лікарняний</b>\n\n📅 <b>Вкажіть дату лікарняного</b> (ДД.ММ.РРРР):');
+  } catch (error) {
+    console.error('❌ Помилка reportSick:', error);
+  }
+}
+
+async function processSickReport(chatId, telegramId, sickData) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      throw new ValidationError('Користувач не знайдений.', 'user');
+    }
+    
+    const { date } = sickData;
+    await saveSickRecord(telegramId, user, date);
+    
+    // Перевіряємо чи є PM
+    const pm = await getPMForUser(user);
+    if (pm) {
+      await notifyPMAboutSick(user, date);
+    }
+    await notifyHRAboutSick(user, date, pm !== null);
+    
+    await sendMessage(chatId, `✅ <b>Повідомлення про лікарняний відправлено!</b>\n\n📅 <b>Дата:</b> ${formatDate(date)}\n\nОдужуйте! 🏥`);
+  } catch (error) {
+    console.error('❌ Помилка processSickReport:', error);
+    await sendMessage(chatId, '❌ Помилка обробки лікарняного.');
+  }
+}
+
+async function notifyPMAboutSick(user, date) {
+  try {
+    const pm = await getPMForUser(user);
+    if (!pm || !pm.telegramId) return;
+    
+    const message = `🏥 <b>Лікарняний</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}`;
+    await sendMessage(pm.telegramId, message);
+  } catch (error) {
+    console.error('❌ Помилка notifyPMAboutSick:', error);
+  }
+}
+
+async function notifyHRAboutSick(user, date, hasPM) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    const message = `🏥 <b>ЛІКАРНЯНИЙ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
+    await sendMessage(HR_CHAT_ID, message);
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutSick:', error);
+  }
+}
+
+async function showSickStats(chatId, telegramId) {
+  try {
+    const stats = await getSickStatsForCurrentMonth(telegramId);
+    const text = `📊 <b>Статистика лікарняних за поточний місяць</b>\n\n🏥 <b>Днів:</b> ${stats.days}\n📝 <b>Записів:</b> ${stats.count}`;
+    await sendMessage(chatId, text);
+  } catch (error) {
+    console.error('❌ Помилка showSickStats:', error);
+  }
+}
+
+async function getSickStatsForCurrentMonth(telegramId) {
+  try {
+    if (!doc) return { days: 0, count: 0 };
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Sick'];
+    if (!sheet) return { days: 0, count: 0 };
+    
+    const rows = await sheet.getRows();
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    const userSick = rows.filter(row => {
+      if (row.get('TelegramID') != telegramId) return false;
+      const rowDate = new Date(row.get('Date'));
+      return rowDate.getMonth() === currentMonth && rowDate.getFullYear() === currentYear;
+    });
+    
+    return { days: userSick.length, count: userSick.length };
+  } catch (error) {
+    console.error('❌ Помилка getSickStatsForCurrentMonth:', error);
+    return { days: 0, count: 0 };
+  }
+}
+
+async function saveSickRecord(telegramId, user, date) {
+  try {
+    if (!doc) return;
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['Sick'];
+    if (!sheet) {
+      sheet = await doc.addSheet({
+        title: 'Sick',
+        headerValues: ['TelegramID', 'FullName', 'Department', 'Team', 'Date', 'CreatedAt']
+      });
+    }
+    
+    await sheet.addRow({
+      TelegramID: telegramId,
+      FullName: user.fullName,
+      Department: user.department,
+      Team: user.team,
+      Date: date.toISOString().split('T')[0],
+      CreatedAt: new Date().toISOString()
+    });
+    
+    console.log(`✅ Збережено лікарняний: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+  } catch (error) {
+    console.error('❌ Помилка saveSickRecord:', error);
   }
 }
 
