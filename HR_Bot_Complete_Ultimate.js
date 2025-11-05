@@ -635,7 +635,13 @@ async function processCallback(callbackQuery) {
       'onboarding_rules': () => showCompanyRules(chatId, telegramId),
       'onboarding_structure': () => showTeamStructure(chatId, telegramId),
       // AI помічник видалено
-      'back_to_main': () => showMainMenu(chatId, telegramId)
+      'back_to_main': async () => {
+        // Очищаємо кеш реєстрації/форм перед поверненням до головного меню
+        if (registrationCache.has(telegramId)) {
+          registrationCache.delete(telegramId);
+        }
+        await showMainMenu(chatId, telegramId);
+      }
     };
     
     if (routes[data]) {
@@ -1150,6 +1156,13 @@ async function handleRegistrationStep(chatId, telegramId, text) {
         }
         regData.data.firstWorkDay = text;
         await completeRegistration(chatId, telegramId, regData.data);
+        break;
+
+      case 'asap_message':
+        // Обробка ASAP запиту
+        await processASAPRequest(chatId, telegramId, text);
+        // Очищаємо кеш після обробки
+        registrationCache.delete(telegramId);
         break;
     }
   } catch (error) {
@@ -1718,6 +1731,40 @@ async function showASAPMenu(chatId, telegramId) {
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showASAPMenu:', error);
+  }
+}
+
+// 🚨 ФОРМА ASAP ЗАПИТУ
+async function showASAPForm(chatId, telegramId) {
+  try {
+    const user = await getUserInfo(telegramId);
+    
+    const text = `🚨 <b>ASAP Запит</b>
+
+👤 ${user?.FullName || 'Користувач'}
+🏢 ${user?.Department || ''}${user?.Team ? ' / ' + user.Team : ''}
+
+📝 <b>Опишіть вашу проблему, яка потребує негайного вирішення:</b>
+
+<i>Напишіть повідомлення, і воно буде одразу відправлено HR для розгляду.</i>`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '⬅️ Назад', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+
+    await sendMessage(chatId, text, keyboard);
+    
+    // Встановлюємо крок для обробки тексту
+    registrationCache.set(telegramId, {
+      step: 'asap_message',
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error('❌ Помилка showASAPForm:', error);
   }
 }
 
@@ -4145,6 +4192,70 @@ async function showSickStats(chatId, telegramId) {
   } catch (error) {
     console.error('❌ Помилка showSickStats:', error);
   }
+}
+
+// 🚨 ОБРОБКА ASAP ЗАПИТУ
+/**
+ * Обробляє ASAP запит від користувача
+ * @param {number} chatId - ID чату
+ * @param {number} telegramId - Telegram ID користувача
+ * @param {string} message - Текст запиту
+ * @returns {Promise<void>}
+ */
+async function processASAPRequest(chatId, telegramId, message) {
+  return executeWithRetryAndMonitor(
+    async () => {
+      if (!doc) throw new Error('Google Sheets не підключено');
+      
+      const user = await getUserInfo(telegramId);
+      if (!user) {
+        throw new Error('Користувач не знайдено');
+      }
+      
+      await doc.loadInfo();
+      let sheet = doc.sheetsByTitle['ASAP_Requests'];
+      if (!sheet) {
+        sheet = await doc.addSheet({
+          title: 'ASAP_Requests',
+          headerValues: [
+            'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'Message', 'CreatedAt', 'Status'
+          ]
+        });
+      }
+      
+      const requestId = `ASAP_${Date.now()}_${telegramId}`;
+      const now = new Date();
+      
+      await sheet.addRow({
+        RequestID: requestId,
+        TelegramID: telegramId,
+        FullName: user.fullName || user.FullName || 'Невідомо',
+        Department: user.department || user.Department || 'Невідомо',
+        Team: user.team || user.Team || 'Невідомо',
+        Message: message,
+        CreatedAt: now.toISOString(),
+        Status: 'pending'
+      });
+      
+      console.log(`✅ Збережено ASAP запит: ${requestId}`);
+      
+      // Підтвердження користувачу
+      await sendMessage(chatId, `✅ <b>ASAP запит відправлено!</b>\n\n📝 <b>Ваше повідомлення:</b>\n"${message}"\n\n⏰ HR отримає повідомлення негайно.`);
+      
+      // Негайне повідомлення HR
+      if (HR_CHAT_ID) {
+        const hrMessage = `🚨 <b>ASAP ЗАПИТ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName || user.FullName || 'Невідомо'}\n🏢 <b>Відділ:</b> ${user.department || user.Department || 'Невідомо'}\n👥 <b>Команда:</b> ${user.team || user.Team || 'Невідомо'}\n\n📝 <b>Повідомлення:</b>\n${message}\n\n⏰ <b>Час:</b> ${now.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' })}\n\n🆔 <b>ID запиту:</b> ${requestId}`;
+        await sendMessage(HR_CHAT_ID, hrMessage);
+        console.log(`✅ Відправлено ASAP запит HR: ${requestId}`);
+      }
+    },
+    'processASAPRequest',
+    { telegramId }
+  ).catch(error => {
+    logger.error('Failed to process ASAP request after retries', error, { telegramId });
+    sendMessage(chatId, '❌ Помилка відправки ASAP запиту. Спробуйте пізніше.');
+    throw error;
+  });
 }
 
 async function getSickStatsForCurrentMonth(telegramId) {
