@@ -319,6 +319,7 @@ app.get('/health', (req, res) => {
 
 // Webhook endpoint
 app.post('/webhook', async (req, res) => {
+  const startTime = Date.now();
   try {
     const update = req.body;
     
@@ -327,41 +328,66 @@ app.post('/webhook', async (req, res) => {
       update_id: update?.update_id,
       has_message: !!update?.message,
       has_callback: !!update?.callback_query,
-      message_text: update?.message?.text
+      message_text: update?.message?.text,
+      message_from_id: update?.message?.from?.id,
+      message_chat_id: update?.message?.chat?.id
     }));
+    
+    // Швидко відповідаємо Telegram, щоб він не повторював запит
+    res.status(200).send('OK');
     
     if (!update) {
       console.log('⚠️ Порожній update');
-      return res.status(200).send('OK');
+      return;
     }
     
     // Перевірка на дублювання
     const updateIdStr = String(update.update_id);
     if (processedUpdates.has(updateIdStr)) {
       console.log('⚠️ Дублікат update_id:', updateIdStr);
-      return res.status(200).send('OK');
+      return;
     }
     
     // Додаємо в кеш (використовуємо set, а не add!)
     processedUpdates.set(updateIdStr, true);
     
-    // Обробка повідомлення
+    // Обробка повідомлення (асинхронно, неблокуюче)
     if (update.message) {
-      console.log('📝 Обробка повідомлення від:', update.message.from?.id);
-      await processMessage(update.message);
+      const message = update.message;
+      console.log('📝 Обробка повідомлення від:', message.from?.id, 'текст:', message.text);
+      
+      // Обробляємо асинхронно, неблокуюче
+      processMessage(message).catch(error => {
+        console.error('❌ Помилка обробки повідомлення:', error);
+        console.error('❌ Stack:', error.stack);
+        console.error('❌ Message details:', JSON.stringify({
+          chat_id: message.chat?.id,
+          from_id: message.from?.id,
+          text: message.text
+        }));
+      });
     } else if (update.callback_query) {
-      console.log('🔘 Обробка callback від:', update.callback_query.from?.id);
-      await processCallback(update.callback_query);
+      const callback = update.callback_query;
+      console.log('🔘 Обробка callback від:', callback.from?.id, 'data:', callback.data);
+      
+      // Обробляємо асинхронно, неблокуюче
+      processCallback(callback).catch(error => {
+        console.error('❌ Помилка обробки callback:', error);
+        console.error('❌ Stack:', error.stack);
+      });
     } else {
       console.log('⚠️ Невідомий тип update:', Object.keys(update));
     }
     
-    res.status(200).send('OK');
+    const duration = Date.now() - startTime;
+    console.log(`✅ Webhook оброблено за ${duration}ms`);
+    
   } catch (error) {
+    const duration = Date.now() - startTime;
     console.error('❌ Webhook error:', error);
     console.error('❌ Stack:', error.stack);
-    // Відправляємо OK навіть при помилці, щоб Telegram не повторював запит
-    res.status(200).send('OK');
+    console.error(`❌ Помилка після ${duration}ms`);
+    // Вже відправили OK, тому просто логуємо помилку
   }
 });
 
