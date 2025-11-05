@@ -533,6 +533,12 @@ async function processCallback(callbackQuery) {
     } else if (data.startsWith('mailing_role_')) {
       const role = data.replace('mailing_role_', '');
       await startMailingToRoleSelected(chatId, telegramId, role);
+    } else if (data.startsWith('vacation_hr_approve_')) {
+      const requestId = data.replace('vacation_hr_approve_', '');
+      await handleHRVacationApproval(chatId, telegramId, requestId, true);
+    } else if (data.startsWith('vacation_hr_reject_')) {
+      const requestId = data.replace('vacation_hr_reject_', '');
+      await handleHRVacationApproval(chatId, telegramId, requestId, false);
     }
     
   } catch (error) {
@@ -595,13 +601,15 @@ async function getUserInfo(telegramId) {
     
     if (user) {
       const userData = {
+        telegramId: parseInt(user.get('TelegramID')),
         fullName: user.get('FullName'),
         department: user.get('Department'),
         team: user.get('Team'),
         position: user.get('Position'),
         birthDate: user.get('BirthDate'),
         firstWorkDay: user.get('FirstWorkDay'),
-        workMode: user.get('WorkMode')
+        workMode: user.get('WorkMode'),
+        pm: user.get('PM') || null
       };
       
       userCache.set(telegramId, { data: userData, timestamp: Date.now() });
@@ -636,6 +644,69 @@ async function getUserRole(telegramId) {
   } catch (error) {
     console.error('❌ Помилка getUserRole:', error);
     return 'EMP';
+  }
+}
+
+// 👤 ОТРИМАННЯ PM ДЛЯ КОРИСТУВАЧА
+/**
+ * Знаходить PM (Project Manager) для користувача
+ * Перевіряє поле PM у користувача, або знаходить PM по градації (відділ/команда)
+ * @param {User} user - Об'єкт користувача
+ * @returns {Promise<{telegramId: number, fullName: string}|null>} PM або null якщо не знайдено
+ */
+async function getPMForUser(user) {
+  try {
+    if (!doc || !user) return null;
+    
+    // Перевіряємо чи є PM у полі користувача
+    if (user.pm) {
+      // Якщо PM вказаний як Telegram ID
+      const pmId = parseInt(user.pm);
+      if (!isNaN(pmId)) {
+        const pmUser = await getUserInfo(pmId);
+        if (pmUser) {
+          return { telegramId: pmId, fullName: pmUser.fullName };
+        }
+      }
+    }
+    
+    // Шукаємо PM по градації (відділ/команда)
+    await doc.loadInfo();
+    const employeesSheet = doc.sheetsByTitle['Employees'];
+    if (!employeesSheet) return null;
+    
+    const rows = await employeesSheet.getRows();
+    
+    // Шукаємо PM в тому ж відділі/команді
+    const pmRow = rows.find(row => {
+      const department = row.get('Department');
+      const team = row.get('Team');
+      const position = row.get('Position');
+      const telegramId = row.get('TelegramID');
+      
+      // Перевіряємо чи це PM в тому ж відділі/команді
+      if (department === user.department && team === user.team) {
+        // Перевіряємо чи посада містить PM
+        if (position && (position.includes('PM') || position.includes('Project Manager'))) {
+          return true;
+        }
+      }
+      
+      return false;
+    });
+    
+    if (pmRow) {
+      const pmTelegramId = parseInt(pmRow.get('TelegramID'));
+      const pmFullName = pmRow.get('FullName');
+      if (!isNaN(pmTelegramId) && pmFullName) {
+        return { telegramId: pmTelegramId, fullName: pmFullName };
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ Помилка getPMForUser:', error);
+    return null;
   }
 }
 
@@ -997,9 +1068,9 @@ async function showVacationMenu(chatId, telegramId) {
 
 <b>Правила відпусток:</b>
 • Мін: 1 день, Макс: 7 днів за раз
-• 3 місяці до першої відпустки
+• Відпустка доступна після 3-х місяців від початку роботи
 • Накладки заборонені в команді
-• Процес: Ви → PM → HR
+• Процес: Ви → PM → HR (якщо немає PM, то одразу → HR)
 
 Оберіть дію:`;
 
@@ -2224,20 +2295,33 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       return;
     }
     
+    // Перевіряємо чи є PM для користувача
+    const pm = await getPMForUser(user);
+    const hasPM = pm !== null;
+    
+    // Визначаємо статус заявки
+    const initialStatus = hasPM ? 'pending_pm' : 'pending_hr';
+    
     // Зберігаємо заявку в таблицю
-    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days);
+    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days, initialStatus, pm);
     
     // Оновлюємо баланс відпусток (тільки після затвердження)
     // await updateVacationBalance(telegramId, user, days);
     
-    // Повідомляємо PM
-    await notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days);
-    
-    // Повідомляємо HR про нову заявку
-    await notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days);
-    
-    // Підтвердження користувачу
-    await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
+    if (hasPM) {
+      // Якщо є PM - відправляємо PM, потім HR
+      await notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days, pm);
+      await notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days, conflicts, false);
+      
+      // Підтвердження користувачу
+      await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${pm.fullName}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
+    } else {
+      // Якщо немає PM - відправляємо одразу HR з можливістю підтвердження
+      await notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days, conflicts, true);
+      
+      // Підтвердження користувачу
+      await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> Не призначено\n\n⏳ Заявка відправлена одразу на затвердження HR.`);
+    }
     
     // Логування
     await logUserData(telegramId, 'vacation_request', {
@@ -2319,7 +2403,7 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
  * @param {number} days - Кількість днів відпустки
  * @returns {Promise<string>} ID збереженої заявки
  */
-async function saveVacationRequest(telegramId, user, startDate, endDate, days) {
+async function saveVacationRequest(telegramId, user, startDate, endDate, days, status = 'pending_pm', pm = null) {
   try {
     if (!doc) throw new Error('Google Sheets не підключено');
     
@@ -2336,6 +2420,7 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days) {
     }
     
     const requestId = `VAC_${Date.now()}_${telegramId}`;
+    const pmName = pm ? pm.fullName : (user.pm || 'Не призначено');
     
     await sheet.addRow({
       RequestID: requestId,
@@ -2343,17 +2428,17 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days) {
       FullName: user.fullName,
       Department: user.department,
       Team: user.team,
-      PM: user.pm || 'Не призначено',
+      PM: pmName,
       StartDate: startDate.toISOString().split('T')[0],
       EndDate: endDate.toISOString().split('T')[0],
       Days: days,
-      Status: 'pending_pm',
+      Status: status,
       CreatedAt: new Date().toISOString(),
       ApprovedBy: '',
       ApprovedAt: ''
     });
     
-    console.log(`✅ Збережено заявку на відпустку: ${requestId}`);
+    console.log(`✅ Збережено заявку на відпустку: ${requestId}, статус: ${status}`);
     return requestId;
   } catch (error) {
     console.error('❌ Помилка saveVacationRequest:', error);
@@ -2369,20 +2454,22 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days) {
  * @param {Date} startDate - Дата початку відпустки
  * @param {Date} endDate - Дата закінчення відпустки
  * @param {number} days - Кількість днів відпустки
+ * @param {{telegramId: number, fullName: string}} pm - PM для користувача
  * @returns {Promise<void>}
  */
-async function notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days) {
+async function notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days, pm) {
   try {
-    if (!user.pm || !HR_CHAT_ID) return;
+    if (!pm || !pm.telegramId) return;
     
     const message = `📋 <b>Нова заявка на відпустку</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n🆔 <b>ID заявки:</b> ${requestId}\n\n⏳ <b>Потребує підтвердження PM</b>`;
     
-    await sendMessage(HR_CHAT_ID, message);
+    await sendMessage(pm.telegramId, message);
     
     // Логування
     await logUserData(user.telegramId, 'pm_notification', {
       requestId,
-      pm: user.pm,
+      pm: pm.fullName,
+      pmTelegramId: pm.telegramId,
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
       days
@@ -2394,32 +2481,63 @@ async function notifyPMAboutVacationRequest(user, requestId, startDate, endDate,
 
 // Повідомлення HR про нову заявку на відпустку
 /**
- * Відправляє повідомлення HR про нову заявку на відпустку
+ * Відправляє повідомлення HR про нову заявку на відпустку з інформацією про пересічення та кнопками підтвердження
  * @param {User} user - Об'єкт користувача
  * @param {string} requestId - ID заявки на відпустку
  * @param {Date} startDate - Дата початку відпустки
  * @param {Date} endDate - Дата закінчення відпустки
  * @param {number} days - Кількість днів відпустки
+ * @param {Array} conflicts - Масив конфліктів (пересічень) з іншими відпустками
+ * @param {boolean} canApprove - Чи може HR одразу підтвердити (якщо немає PM)
  * @returns {Promise<void>}
  */
-async function notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days) {
+async function notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days, conflicts = [], canApprove = false) {
   try {
     if (!HR_CHAT_ID) return;
     
-    const message = `📋 <b>НОВА ЗАЯВКА НА ВІДПУСТКУ</b>
-
-👤 <b>Співробітник:</b> ${user.fullName}
-🏢 <b>Відділ:</b> ${user.department}
-👥 <b>Команда:</b> ${user.team}
-📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}
-📊 <b>Днів:</b> ${days}
-👤 <b>PM:</b> ${user.pm || 'Не призначено'}
-🆔 <b>ID заявки:</b> ${requestId}
-
-🔄 <b>Процес:</b> Користувач → PM → HR
-⏳ <b>Статус:</b> Очікує підтвердження PM`;
-
-    await sendMessage(HR_CHAT_ID, message);
+    let message = `📋 <b>НОВА ЗАЯВКА НА ВІДПУСТКУ</b>\n\n`;
+    message += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
+    message += `🏢 <b>Відділ:</b> ${user.department}\n`;
+    message += `👥 <b>Команда:</b> ${user.team}\n`;
+    message += `📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n`;
+    message += `📊 <b>Днів:</b> ${days}\n`;
+    message += `👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n`;
+    message += `🆔 <b>ID заявки:</b> ${requestId}\n\n`;
+    
+    // Додаємо інформацію про пересічення
+    if (conflicts && conflicts.length > 0) {
+      message += `⚠️ <b>ПЕРЕСІЧЕННЯ З ІНШИМИ ВІДПУСТКАМИ:</b>\n\n`;
+      conflicts.forEach((conflict, index) => {
+        message += `${index + 1}. 👤 <b>${conflict.fullName}</b>\n`;
+        message += `   🏢 ${conflict.department}/${conflict.team}\n`;
+        message += `   📅 ${conflict.startDate} - ${conflict.endDate}\n\n`;
+      });
+    } else {
+      message += `✅ <b>Пересічень з іншими відпустками немає</b>\n\n`;
+    }
+    
+    if (canApprove) {
+      message += `🔄 <b>Процес:</b> Користувач → HR (без PM)\n`;
+      message += `⏳ <b>Статус:</b> Очікує підтвердження HR`;
+    } else {
+      message += `🔄 <b>Процес:</b> Користувач → PM → HR\n`;
+      message += `⏳ <b>Статус:</b> Очікує підтвердження PM`;
+    }
+    
+    // Створюємо клавіатуру з кнопками для HR
+    const keyboard = {
+      inline_keyboard: []
+    };
+    
+    if (canApprove) {
+      // Якщо немає PM - HR може одразу підтвердити або відхилити
+      keyboard.inline_keyboard.push([
+        { text: '✅ Підтвердити', callback_data: `vacation_hr_approve_${requestId}` },
+        { text: '❌ Відхилити', callback_data: `vacation_hr_reject_${requestId}` }
+      ]);
+    }
+    
+    await sendMessage(HR_CHAT_ID, message, keyboard);
     
     // Логування
     await logUserData(user.telegramId, 'hr_notification', {
@@ -2428,7 +2546,10 @@ async function notifyHRAboutVacationRequest(user, requestId, startDate, endDate,
       endDate: endDate.toISOString(),
       days,
       department: user.department,
-      team: user.team
+      team: user.team,
+      hasConflicts: conflicts.length > 0,
+      conflictsCount: conflicts.length,
+      canApprove
     });
   } catch (error) {
     console.error('❌ Помилка notifyHRAboutVacationRequest:', error);
@@ -2449,6 +2570,95 @@ async function notifyHRAboutConflict(user, conflicts, startDate, endDate) {
     await sendMessage(HR_CHAT_ID, message);
   } catch (error) {
     console.error('❌ Помилка notifyHRAboutConflict:', error);
+  }
+}
+
+// Обробка підтвердження/відхилення відпустки HR
+/**
+ * Обробляє підтвердження або відхилення відпустки від HR
+ * @param {number} chatId - ID чату HR
+ * @param {number} hrTelegramId - Telegram ID HR
+ * @param {string} requestId - ID заявки на відпустку
+ * @param {boolean} approved - true якщо підтверджено, false якщо відхилено
+ * @returns {Promise<void>}
+ */
+async function handleHRVacationApproval(chatId, telegramId, requestId, approved) {
+  try {
+    // Перевіряємо чи це HR
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Помилка: Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['Vacations'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Помилка: Таблиця відпусток не знайдена.');
+      return;
+    }
+    
+    // Шукаємо заявку
+    const rows = await sheet.getRows();
+    const requestRow = rows.find(row => row.get('RequestID') === requestId);
+    
+    if (!requestRow) {
+      await sendMessage(chatId, `❌ Заявка з ID ${requestId} не знайдена.`);
+      return;
+    }
+    
+    // Оновлюємо статус
+    const newStatus = approved ? 'approved' : 'rejected';
+    requestRow.set('Status', newStatus);
+    requestRow.set('ApprovedBy', telegramId);
+    requestRow.set('ApprovedAt', new Date().toISOString());
+    await requestRow.save();
+    
+    // Отримуємо дані заявки
+    const userTelegramId = parseInt(requestRow.get('TelegramID'));
+    const userFullName = requestRow.get('FullName');
+    const startDate = requestRow.get('StartDate');
+    const endDate = requestRow.get('EndDate');
+    const days = requestRow.get('Days');
+    
+    // Повідомляємо HR про успіх
+    const hrMessage = approved 
+      ? `✅ <b>Заявку підтверджено!</b>\n\n👤 <b>Співробітник:</b> ${userFullName}\n📅 <b>Період:</b> ${startDate} - ${endDate}\n📊 <b>Днів:</b> ${days}\n🆔 <b>ID:</b> ${requestId}`
+      : `❌ <b>Заявку відхилено</b>\n\n👤 <b>Співробітник:</b> ${userFullName}\n📅 <b>Період:</b> ${startDate} - ${endDate}\n📊 <b>Днів:</b> ${days}\n🆔 <b>ID:</b> ${requestId}`;
+    
+    await sendMessage(chatId, hrMessage);
+    
+    // Повідомляємо користувача про результат
+    if (userTelegramId) {
+      const userMessage = approved
+        ? `✅ <b>Вашу заявку на відпустку підтверджено!</b>\n\n📅 <b>Період:</b> ${startDate} - ${endDate}\n📊 <b>Днів:</b> ${days}\n\nВідпочивайте! 🏖️`
+        : `❌ <b>Вашу заявку на відпустку відхилено</b>\n\n📅 <b>Період:</b> ${startDate} - ${endDate}\n📊 <b>Днів:</b> ${days}\n\nБудь ласка, зверніться до HR для уточнення.`;
+      
+      try {
+        await sendMessage(userTelegramId, userMessage);
+      } catch (error) {
+        console.error('❌ Помилка відправки повідомлення користувачу:', error);
+      }
+    }
+    
+    // Логування
+    await logUserData(userTelegramId, 'hr_vacation_decision', {
+      requestId,
+      approved,
+      hrTelegramId: telegramId,
+      status: newStatus
+    });
+    
+    console.log(`✅ Заявка ${requestId} ${approved ? 'підтверджена' : 'відхилена'} HR (${telegramId})`);
+    
+  } catch (error) {
+    console.error('❌ Помилка handleHRVacationApproval:', error);
+    await sendMessage(chatId, '❌ Помилка обробки заявки. Спробуйте пізніше.');
   }
 }
 
