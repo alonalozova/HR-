@@ -214,6 +214,93 @@ setInterval(() => {
   console.log(`📊 Кеш статистика: userCache=${userCache.size()}, registrationCache=${registrationCache.size()}, processedUpdates=${processedUpdates.size()}`);
 }, 10 * 60 * 1000);
 
+// 🔄 RETRY ЛОГІКА ДЛЯ GOOGLE SHEETS
+/**
+ * Виконує функцію з повторними спробами при помилках
+ * @param {Function} fn - Функція для виконання
+ * @param {number} maxRetries - Максимальна кількість спроб (за замовчуванням 3)
+ * @param {number} delay - Затримка між спробами в мс (за замовчуванням 1000)
+ * @returns {Promise<any>} Результат виконання функції
+ */
+async function withRetry(fn, maxRetries = 3, delay = 1000) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const isLastAttempt = attempt === maxRetries;
+      const isRetryable = error.message?.includes('rate limit') || 
+                         error.message?.includes('quota') ||
+                         error.message?.includes('timeout') ||
+                         error.code === 'ECONNRESET' ||
+                         error.code === 'ETIMEDOUT';
+      
+      if (isLastAttempt || !isRetryable) {
+        logger.error(`Retry failed after ${attempt} attempts`, error);
+        throw error;
+      }
+      
+      const waitTime = delay * Math.pow(2, attempt - 1); // Exponential backoff
+      logger.warn(`Retry attempt ${attempt}/${maxRetries} after ${waitTime}ms`, { error: error.message });
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+  }
+  throw lastError;
+}
+
+// ⏱️ МОНІТОРИНГ ПРОДУКТИВНОСТІ
+/**
+ * Вимірює час виконання функції та логує результат
+ * @param {Function} fn - Функція для виконання
+ * @param {string} operationName - Назва операції для логування
+ * @param {Object} context - Контекст для логування
+ * @returns {Promise<any>} Результат виконання функції
+ */
+async function withPerformanceMonitor(fn, operationName, context = {}) {
+  const startTime = Date.now();
+  try {
+    const result = await fn();
+    const duration = Date.now() - startTime;
+    logger.info(`Performance: ${operationName}`, { 
+      duration: `${duration}ms`,
+      ...context 
+    });
+    
+    // Попередження якщо операція занадто довга
+    if (duration > 5000) {
+      logger.warn(`Slow operation detected: ${operationName} took ${duration}ms`, context);
+    }
+    
+    return result;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    logger.error(`Performance: ${operationName} failed`, error, { 
+      duration: `${duration}ms`,
+      ...context 
+    });
+    throw error;
+  }
+}
+
+// 🔄 КОМБІНОВАНИЙ HELPER: RETRY + PERFORMANCE MONITORING
+/**
+ * Виконує функцію з retry та моніторингом продуктивності
+ * @param {Function} fn - Функція для виконання
+ * @param {string} operationName - Назва операції
+ * @param {Object} options - Опції (maxRetries, delay, context)
+ * @returns {Promise<any>} Результат виконання
+ */
+async function executeWithRetryAndMonitor(fn, operationName, options = {}) {
+  const { maxRetries = 3, delay = 1000, context = {} } = options;
+  
+  return withPerformanceMonitor(
+    () => withRetry(fn, maxRetries, delay),
+    operationName,
+    context
+  );
+}
+
 // 🏗️ СТРУКТУРА КОМАНДИ
 const DEPARTMENTS = {
   'Marketing': {
@@ -434,6 +521,17 @@ async function processMessage(message) {
       return;
     }
     
+    // Команда /stats для HR/CEO
+    if (text === '/stats' || text === '/stats@' + (process.env.BOT_USERNAME || '')) {
+      const role = await getUserRole(telegramId);
+      if (role === 'HR' || role === 'CEO') {
+        await showHRDashboardStats(chatId, telegramId);
+      } else {
+        await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR та CEO.');
+      }
+      return;
+    }
+    
     // Обробка Reply Keyboard кнопок
     if (await handleReplyKeyboard(chatId, telegramId, text)) {
       return;
@@ -581,6 +679,15 @@ async function processCallback(callbackQuery) {
     } else if (data.startsWith('vacation_hr_reject_')) {
       const requestId = data.replace('vacation_hr_reject_', '');
       await handleHRVacationApproval(chatId, telegramId, requestId, false);
+    } else if (data === 'emergency_vacation_confirm_yes') {
+      const regData = registrationCache.get(telegramId);
+      if (regData && regData.step === 'emergency_vacation_confirm_past_date') {
+        regData.step = 'emergency_vacation_days';
+        await sendMessage(chatId, `📅 <b>Дата початку:</b> ${formatDate(regData.data.startDate)}\n\n📊 <b>Вкажіть кількість днів відпустки</b>\n\nВведіть кількість днів (1-7):`);
+      }
+    } else if (data === 'emergency_vacation_confirm_no') {
+      await sendMessage(chatId, '❌ Заявку скасовано. Почніть спочатку.');
+      registrationCache.delete(telegramId);
     }
     
   } catch (error) {
@@ -2341,7 +2448,15 @@ async function handleVacationProcess(chatId, telegramId, text) {
       startDate.setHours(0, 0, 0, 0);
       
       if (startDate < today) {
-        await sendMessage(chatId, `⚠️ <b>Увага!</b> Ви вказали дату в минулому (${text}). Екстрена відпустка може бути зафіксована ретроспективно. Продовжити?`);
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: '✅ Так, продовжити', callback_data: 'emergency_vacation_confirm_yes' },
+              { text: '❌ Ні, скасувати', callback_data: 'emergency_vacation_confirm_no' }
+            ]
+          ]
+        };
+        await sendMessage(chatId, `⚠️ <b>Увага!</b> Ви вказали дату в минулому (${text}). Екстрена відпустка може бути зафіксована ретроспективно. Продовжити?`, keyboard);
         regData.step = 'emergency_vacation_confirm_past_date';
         regData.data.startDate = startDate;
         return true;
@@ -2669,48 +2784,52 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
  * @returns {Promise<string>} ID збереженої заявки
  */
 async function saveVacationRequest(telegramId, user, startDate, endDate, days, status = 'pending_pm', pm = null, requestType = 'regular', reason = '') {
-  try {
-    if (!doc) throw new Error('Google Sheets не підключено');
-    
-    await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Vacations'];
-    if (!sheet) {
-      sheet = await doc.addSheet({
-        title: 'Vacations',
-        headerValues: [
-          'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'PM',
-          'StartDate', 'EndDate', 'Days', 'Status', 'RequestType', 'Reason', 'CreatedAt', 'ApprovedBy', 'ApprovedAt'
-        ]
+  return executeWithRetryAndMonitor(
+    async () => {
+      if (!doc) throw new Error('Google Sheets не підключено');
+      
+      await doc.loadInfo();
+      let sheet = doc.sheetsByTitle['Vacations'];
+      if (!sheet) {
+        sheet = await doc.addSheet({
+          title: 'Vacations',
+          headerValues: [
+            'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'PM',
+            'StartDate', 'EndDate', 'Days', 'Status', 'RequestType', 'Reason', 'CreatedAt', 'ApprovedBy', 'ApprovedAt'
+          ]
+        });
+      }
+      
+      const requestId = `VAC_${Date.now()}_${telegramId}`;
+      const pmName = pm ? pm.fullName : (user.pm || 'Не призначено');
+      
+      await sheet.addRow({
+        RequestID: requestId,
+        TelegramID: telegramId,
+        FullName: user.fullName,
+        Department: user.department,
+        Team: user.team,
+        PM: pmName,
+        StartDate: startDate.toISOString().split('T')[0],
+        EndDate: endDate.toISOString().split('T')[0],
+        Days: days,
+        Status: status,
+        RequestType: requestType,
+        Reason: reason || '',
+        CreatedAt: new Date().toISOString(),
+        ApprovedBy: '',
+        ApprovedAt: ''
       });
-    }
-    
-    const requestId = `VAC_${Date.now()}_${telegramId}`;
-    const pmName = pm ? pm.fullName : (user.pm || 'Не призначено');
-    
-    await sheet.addRow({
-      RequestID: requestId,
-      TelegramID: telegramId,
-      FullName: user.fullName,
-      Department: user.department,
-      Team: user.team,
-      PM: pmName,
-      StartDate: startDate.toISOString().split('T')[0],
-      EndDate: endDate.toISOString().split('T')[0],
-      Days: days,
-      Status: status,
-      RequestType: requestType,
-      Reason: reason || '',
-      CreatedAt: new Date().toISOString(),
-      ApprovedBy: '',
-      ApprovedAt: ''
-    });
-    
-    console.log(`✅ Збережено заявку на відпустку: ${requestId}, статус: ${status}, тип: ${requestType}`);
-    return requestId;
-  } catch (error) {
-    console.error('❌ Помилка saveVacationRequest:', error);
+      
+      console.log(`✅ Збережено заявку на відпустку: ${requestId}, статус: ${status}, тип: ${requestType}`);
+      return requestId;
+    },
+    'saveVacationRequest',
+    { telegramId, requestType, status }
+  ).catch(error => {
+    logger.error('Failed to save vacation request after retries', error, { telegramId });
     throw error;
-  }
+  });
 }
 
 // Повідомлення PM про заявку на відпустку
@@ -2983,67 +3102,77 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
 
 // Збереження спізнення
 async function saveLateRecord(telegramId, user, date, reason = '', time = '') {
-  try {
-    if (!doc) return;
-    
-    await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Lates'];
-    if (!sheet) {
-      sheet = await doc.addSheet({
-        title: 'Lates',
-        headerValues: [
-          'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Time', 'Reason', 'CreatedAt'
-        ]
+  return executeWithRetryAndMonitor(
+    async () => {
+      if (!doc) throw new Error('Google Sheets не підключено');
+      
+      await doc.loadInfo();
+      let sheet = doc.sheetsByTitle['Lates'];
+      if (!sheet) {
+        sheet = await doc.addSheet({
+          title: 'Lates',
+          headerValues: [
+            'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Time', 'Reason', 'CreatedAt'
+          ]
+        });
+      }
+      
+      await sheet.addRow({
+        TelegramID: telegramId,
+        FullName: user.fullName,
+        Department: user.department,
+        Team: user.team,
+        Date: date.toISOString().split('T')[0],
+        Time: time,
+        Reason: reason,
+        CreatedAt: new Date().toISOString()
       });
-    }
-    
-    await sheet.addRow({
-      TelegramID: telegramId,
-      FullName: user.fullName,
-      Department: user.department,
-      Team: user.team,
-      Date: date.toISOString().split('T')[0],
-      Time: time,
-      Reason: reason,
-      CreatedAt: new Date().toISOString()
-    });
-    
-    console.log(`✅ Збережено спізнення: ${user.fullName} - ${date.toISOString().split('T')[0]} ${time}`);
-  } catch (error) {
-    console.error('❌ Помилка saveLateRecord:', error);
-  }
+      
+      console.log(`✅ Збережено спізнення: ${user.fullName} - ${date.toISOString().split('T')[0]} ${time}`);
+    },
+    'saveLateRecord',
+    { telegramId, date: date.toISOString().split('T')[0] }
+  ).catch(error => {
+    logger.error('Failed to save late record after retries', error, { telegramId });
+    throw error;
+  });
 }
 
 // Збереження remote запису
 async function saveRemoteRecord(telegramId, user, date, type = 'remote') {
-  try {
-    if (!doc) return;
-    
-    await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Remotes'];
-    if (!sheet) {
-      sheet = await doc.addSheet({
-        title: 'Remotes',
-        headerValues: [
-          'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Type', 'CreatedAt'
-        ]
+  return executeWithRetryAndMonitor(
+    async () => {
+      if (!doc) throw new Error('Google Sheets не підключено');
+      
+      await doc.loadInfo();
+      let sheet = doc.sheetsByTitle['Remotes'];
+      if (!sheet) {
+        sheet = await doc.addSheet({
+          title: 'Remotes',
+          headerValues: [
+            'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Type', 'CreatedAt'
+          ]
+        });
+      }
+      
+      await sheet.addRow({
+        TelegramID: telegramId,
+        FullName: user.fullName,
+        Department: user.department,
+        Team: user.team,
+        Date: date.toISOString().split('T')[0],
+        Type: type,
+        CreatedAt: new Date().toISOString()
       });
-    }
-    
-    await sheet.addRow({
-      TelegramID: telegramId,
-      FullName: user.fullName,
-      Department: user.department,
-      Team: user.team,
-      Date: date.toISOString().split('T')[0],
-      Type: type,
-      CreatedAt: new Date().toISOString()
-    });
-    
-    console.log(`✅ Збережено remote: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
-  } catch (error) {
-    console.error('❌ Помилка saveRemoteRecord:', error);
-  }
+      
+      console.log(`✅ Збережено remote: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+    },
+    'saveRemoteRecord',
+    { telegramId, date: date.toISOString().split('T')[0], type }
+  ).catch(error => {
+    logger.error('Failed to save remote record after retries', error, { telegramId });
+    throw error;
+  });
 }
 
 // Оновлення балансу відпусток
@@ -4044,29 +4173,167 @@ async function getSickStatsForCurrentMonth(telegramId) {
 }
 
 async function saveSickRecord(telegramId, user, date) {
-  try {
-    if (!doc) return;
-    await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Sick'];
-    if (!sheet) {
-      sheet = await doc.addSheet({
-        title: 'Sick',
-        headerValues: ['TelegramID', 'FullName', 'Department', 'Team', 'Date', 'CreatedAt']
+  return executeWithRetryAndMonitor(
+    async () => {
+      if (!doc) throw new Error('Google Sheets не підключено');
+      await doc.loadInfo();
+      let sheet = doc.sheetsByTitle['Sick'];
+      if (!sheet) {
+        sheet = await doc.addSheet({
+          title: 'Sick',
+          headerValues: ['TelegramID', 'FullName', 'Department', 'Team', 'Date', 'CreatedAt']
+        });
+      }
+      
+      await sheet.addRow({
+        TelegramID: telegramId,
+        FullName: user.fullName,
+        Department: user.department,
+        Team: user.team,
+        Date: date.toISOString().split('T')[0],
+        CreatedAt: new Date().toISOString()
       });
+      
+      console.log(`✅ Збережено лікарняний: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+    },
+    'saveSickRecord',
+    { telegramId, date: date.toISOString().split('T')[0] }
+  ).catch(error => {
+    logger.error('Failed to save sick record after retries', error, { telegramId });
+    throw error;
+  });
+}
+
+// 📊 ДАШБОРД СТАТИСТИКИ ДЛЯ HR/CEO
+/**
+ * Показує загальну статистику для HR та CEO
+ * @param {number} chatId - ID чату
+ * @param {number} telegramId - Telegram ID користувача
+ * @returns {Promise<void>}
+ */
+async function showHRDashboardStats(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR та CEO.');
+      return;
     }
-    
-    await sheet.addRow({
-      TelegramID: telegramId,
-      FullName: user.fullName,
-      Department: user.department,
-      Team: user.team,
-      Date: date.toISOString().split('T')[0],
-      CreatedAt: new Date().toISOString()
-    });
-    
-    console.log(`✅ Збережено лікарняний: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+
+    return executeWithRetryAndMonitor(
+      async () => {
+        await doc.loadInfo();
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+
+        // Отримуємо статистику по відпустках
+        const vacationsSheet = doc.sheetsByTitle['Vacations'];
+        const allVacations = vacationsSheet ? await vacationsSheet.getRows() : [];
+        
+        const thisMonthVacations = allVacations.filter(v => {
+          const date = new Date(v.get('CreatedAt') || v.get('StartDate'));
+          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+        });
+        
+        const pendingVacations = thisMonthVacations.filter(v => 
+          v.get('Status') === 'pending_pm' || v.get('Status') === 'pending_hr'
+        );
+        
+        const approvedVacations = thisMonthVacations.filter(v => 
+          v.get('Status') === 'approved'
+        );
+
+        // Отримуємо статистику по спізненнях
+        const latesSheet = doc.sheetsByTitle['Lates'];
+        const allLates = latesSheet ? await latesSheet.getRows() : [];
+        
+        const thisMonthLates = allLates.filter(l => {
+          const date = new Date(l.get('Date'));
+          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+        });
+
+        // Отримуємо статистику по Remote
+        const remotesSheet = doc.sheetsByTitle['Remotes'];
+        const allRemotes = remotesSheet ? await remotesSheet.getRows() : [];
+        
+        const thisMonthRemotes = allRemotes.filter(r => {
+          const date = new Date(r.get('Date'));
+          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+        });
+
+        // Отримуємо статистику по лікарняних
+        const sickSheet = doc.sheetsByTitle['Sick'];
+        const allSick = sickSheet ? await sickSheet.getRows() : [];
+        
+        const thisMonthSick = allSick.filter(s => {
+          const date = new Date(s.get('Date'));
+          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+        });
+
+        // Отримуємо кількість працівників
+        const employeesSheet = doc.sheetsByTitle['Employees'];
+        const allEmployees = employeesSheet ? await employeesSheet.getRows() : [];
+        const totalEmployees = allEmployees.length;
+
+        // Формуємо звіт
+        let report = `📊 <b>ДАШБОРД СТАТИСТИКИ</b>\n\n`;
+        report += `📅 <b>Період:</b> ${now.toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' })}\n`;
+        report += `👥 <b>Всього працівників:</b> ${totalEmployees}\n\n`;
+
+        report += `🏖️ <b>ВІДПУСТКИ</b>\n`;
+        report += `• Заявок за місяць: ${thisMonthVacations.length}\n`;
+        report += `• Очікують затвердження: ${pendingVacations.length}\n`;
+        report += `• Затверджено: ${approvedVacations.length}\n\n`;
+
+        report += `⏰ <b>СПІЗНЕННЯ</b>\n`;
+        report += `• Записів за місяць: ${thisMonthLates.length}\n`;
+        const criticalLates = thisMonthLates.length > 7 ? thisMonthLates.length : 0;
+        if (criticalLates > 0) {
+          report += `⚠️ <b>Критичних випадків (>7): ${criticalLates}</b>\n`;
+        }
+        report += `\n`;
+
+        report += `🏠 <b>REMOTE</b>\n`;
+        report += `• Днів за місяць: ${thisMonthRemotes.length}\n\n`;
+
+        report += `🏥 <b>ЛІКАРНЯНІ</b>\n`;
+        report += `• Днів за місяць: ${thisMonthSick.length}\n\n`;
+
+        // Алерти
+        if (pendingVacations.length > 0) {
+          report += `⚠️ <b>Увага!</b> Є ${pendingVacations.length} заявок на відпустку, що очікують затвердження.\n`;
+        }
+
+        if (criticalLates > 0) {
+          report += `🚨 <b>Критично!</b> ${criticalLates} працівників мають більше 7 спізнень за місяць.\n`;
+        }
+
+        await sendMessage(chatId, report);
+
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: '📤 Експорт даних', callback_data: role === 'CEO' ? 'ceo_export' : 'hr_export' },
+              { text: '📋 Детальні звіти', callback_data: role === 'CEO' ? 'ceo_panel' : 'hr_panel' }
+            ],
+            [
+              { text: '⬅️ Головне меню', callback_data: 'back_to_main' }
+            ]
+          ]
+        };
+        await sendMessage(chatId, 'Оберіть дію:', keyboard);
+      },
+      'showHRDashboardStats',
+      { telegramId, role }
+    );
   } catch (error) {
-    console.error('❌ Помилка saveSickRecord:', error);
+    logger.error('Failed to show HR dashboard stats', error, { telegramId });
+    await sendMessage(chatId, '❌ Помилка завантаження статистики. Спробуйте пізніше.');
   }
 }
 
