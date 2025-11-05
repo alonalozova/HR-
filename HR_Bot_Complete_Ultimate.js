@@ -320,26 +320,29 @@ app.get('/health', (req, res) => {
 // Webhook endpoint
 app.post('/webhook', async (req, res) => {
   const startTime = Date.now();
+  
+  // Швидко відповідаємо Telegram, щоб він не повторював запит
+  // ВАЖЛИВО: Відповідаємо ОДРАЗУ перед будь-якою обробкою
+  res.status(200).send('OK');
+  
   try {
     const update = req.body;
     
-    // Логування для діагностики
-    console.log('📨 Webhook отримано:', JSON.stringify({
-      update_id: update?.update_id,
-      has_message: !!update?.message,
-      has_callback: !!update?.callback_query,
-      message_text: update?.message?.text,
-      message_from_id: update?.message?.from?.id,
-      message_chat_id: update?.message?.chat?.id
-    }));
-    
-    // Швидко відповідаємо Telegram, щоб він не повторював запит
-    res.status(200).send('OK');
-    
-    if (!update) {
-      console.log('⚠️ Порожній update');
+    // Перевірка наявності body
+    if (!update || !update.update_id) {
+      console.log('⚠️ Порожній або невалідний update');
       return;
     }
+    
+    // Логування для діагностики
+    console.log('📨 Webhook отримано:', JSON.stringify({
+      update_id: update.update_id,
+      has_message: !!update.message,
+      has_callback: !!update.callback_query,
+      message_text: update.message?.text?.substring(0, 50),
+      message_from_id: update.message?.from?.id,
+      message_chat_id: update.message?.chat?.id
+    }));
     
     // Перевірка на дублювання
     const updateIdStr = String(update.update_id);
@@ -354,7 +357,7 @@ app.post('/webhook', async (req, res) => {
     // Обробка повідомлення (асинхронно, неблокуюче)
     if (update.message) {
       const message = update.message;
-      console.log('📝 Обробка повідомлення від:', message.from?.id, 'текст:', message.text);
+      console.log('📝 Обробка повідомлення від:', message.from?.id, 'текст:', message.text?.substring(0, 50));
       
       // Обробляємо асинхронно, неблокуюче
       processMessage(message).catch(error => {
@@ -363,7 +366,7 @@ app.post('/webhook', async (req, res) => {
         console.error('❌ Message details:', JSON.stringify({
           chat_id: message.chat?.id,
           from_id: message.from?.id,
-          text: message.text
+          text: message.text?.substring(0, 100)
         }));
       });
     } else if (update.callback_query) {
@@ -394,14 +397,20 @@ app.post('/webhook', async (req, res) => {
 // 📨 ОБРОБКА ПОВІДОМЛЕНЬ
 async function processMessage(message) {
   try {
+    // Перевірка наявності обов'язкових полів
+    if (!message || !message.chat || !message.from) {
+      console.error('❌ Невалідне повідомлення:', JSON.stringify(message));
+      return;
+    }
+    
     const chatId = message.chat.id;
-    const text = message.text;
+    const text = message.text || '';
     const telegramId = message.from.id;
     const username = message.from.username;
     const firstName = message.from.first_name;
     const lastName = message.from.last_name;
     
-    console.log(`📨 Повідомлення від ${telegramId}: ${text}`);
+    console.log(`📨 Повідомлення від ${telegramId}: ${text.substring(0, 50)}`);
     
     // Перевірка на дублювання (використовуємо update_id з webhook, тут не потрібно)
     
