@@ -521,6 +521,12 @@ async function processCallback(callbackQuery) {
       'analytics_hr': () => showHRAnalytics(chatId, telegramId),
       'analytics_ceo': () => showCEOAnalytics(chatId, telegramId),
       'hr_mailings': () => showMailingsMenu(chatId, telegramId),
+      'hr_export': () => showHRExportMenu(chatId, telegramId),
+      'hr_export_employee': () => showHRExportEmployee(chatId, telegramId),
+      'hr_export_department': () => showHRExportDepartment(chatId, telegramId),
+      'ceo_export': () => showCEOExportMenu(chatId, telegramId),
+      'ceo_export_employee': () => showCEOExportEmployee(chatId, telegramId),
+      'ceo_export_department': () => showCEOExportDepartment(chatId, telegramId),
       'hr_mailing_all': () => startMailingToAll(chatId, telegramId),
       'hr_mailing_department': () => startMailingToDepartment(chatId, telegramId),
       'hr_mailing_team': () => startMailingToTeam(chatId, telegramId),
@@ -548,6 +554,18 @@ async function processCallback(callbackQuery) {
     } else if (data.startsWith('faq_')) {
       const faqId = data.replace('faq_', '');
       await showFAQAnswer(chatId, telegramId, faqId);
+    } else if (data.startsWith('hr_export_emp_')) {
+      const targetTelegramId = parseInt(data.replace('hr_export_emp_', ''));
+      await exportEmployeeData(chatId, telegramId, targetTelegramId);
+    } else if (data.startsWith('hr_export_dept_')) {
+      const department = data.replace('hr_export_dept_', '');
+      await exportDepartmentData(chatId, telegramId, department);
+    } else if (data.startsWith('ceo_export_emp_')) {
+      const targetTelegramId = parseInt(data.replace('ceo_export_emp_', ''));
+      await exportEmployeeData(chatId, telegramId, targetTelegramId);
+    } else if (data.startsWith('ceo_export_dept_')) {
+      const department = data.replace('ceo_export_dept_', '');
+      await exportDepartmentData(chatId, telegramId, department);
     } else if (data.startsWith('mailing_dept_')) {
       const department = data.replace('mailing_dept_', '');
       await startMailingToDepartmentSelected(chatId, telegramId, department);
@@ -1132,26 +1150,134 @@ async function getVacationBalance(telegramId) {
     const rows = await sheet.getRows();
     const currentYear = new Date().getFullYear();
     
-    const userVacations = rows.filter(row => 
-      row.get('TelegramID') == telegramId && 
-      row.get('Status') === 'Approved' &&
-      new Date(row.get('StartDate')).getFullYear() === currentYear
-    );
+    const userVacations = rows.filter(row => {
+      const rowTelegramId = row.get('TelegramID');
+      const rowStatus = row.get('Status');
+      const rowStartDate = row.get('StartDate');
+      
+      if (rowTelegramId != telegramId) return false;
+      if (rowStatus !== 'approved' && rowStatus !== 'Approved') return false;
+      if (!rowStartDate) return false;
+      
+      const startDate = new Date(rowStartDate);
+      return startDate.getFullYear() === currentYear;
+    });
     
     const usedDays = userVacations.reduce((total, row) => {
       const start = new Date(row.get('StartDate'));
       const end = new Date(row.get('EndDate'));
-      return total + Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+      const days = parseInt(row.get('Days')) || 0;
+      return total + (days || Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1);
     }, 0);
     
     return {
       used: usedDays,
       total: 24,
-      available: 24 - usedDays
+      available: Math.max(0, 24 - usedDays)
     };
   } catch (error) {
     console.error('❌ Помилка getVacationBalance:', error);
     return { used: 0, total: 24, available: 24 };
+  }
+}
+
+// 📊 ПОКАЗАТИ БАЛАНС ВІДПУСТОК
+async function showVacationBalance(chatId, telegramId) {
+  try {
+    const balance = await getVacationBalance(telegramId);
+    const user = await getUserInfo(telegramId);
+    
+    const text = `📊 <b>Детальний баланс відпусток</b>
+
+💰 <b>Використано:</b> ${balance.used} днів
+📅 <b>Доступно:</b> ${balance.available} днів
+📊 <b>Загальний ліміт:</b> ${balance.total} днів
+
+${user?.firstWorkDay ? `📆 <b>Перший робочий день:</b> ${formatDate(new Date(user.firstWorkDay))}` : ''}
+${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку після:</b> ${formatDate(new Date(new Date(user.firstWorkDay).setMonth(new Date(user.firstWorkDay).getMonth() + 3)))}` : ''}`;
+    
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '⬅️ Назад до відпусток', callback_data: 'vacation_apply' }]
+      ]
+    };
+    
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showVacationBalance:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження балансу.');
+  }
+}
+
+// 📄 МОЇ ЗАЯВКИ НА ВІДПУСТКУ
+async function showMyVacationRequests(chatId, telegramId) {
+  try {
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Vacations'];
+    if (!sheet) {
+      await sendMessage(chatId, '📋 У вас поки немає заявок на відпустку.');
+      return;
+    }
+    
+    const rows = await sheet.getRows();
+    const userRequests = rows
+      .filter(row => row.get('TelegramID') == telegramId)
+      .sort((a, b) => {
+        const dateA = new Date(a.get('StartDate'));
+        const dateB = new Date(b.get('StartDate'));
+        return dateB - dateA; // Сортуємо від нових до старих
+      })
+      .slice(0, 10); // Показуємо останні 10 заявок
+    
+    if (userRequests.length === 0) {
+      await sendMessage(chatId, '📋 У вас поки немає заявок на відпустку.');
+      return;
+    }
+    
+    let text = `📄 <b>Мої заявки на відпустку</b>\n\n`;
+    
+    userRequests.forEach((row, index) => {
+      const status = row.get('Status');
+      const startDate = row.get('StartDate');
+      const endDate = row.get('EndDate');
+      const days = row.get('Days');
+      const requestType = row.get('RequestType') || 'regular';
+      
+      let statusEmoji = '⏳';
+      let statusText = 'Очікує';
+      if (status === 'approved') {
+        statusEmoji = '✅';
+        statusText = 'Затверджено';
+      } else if (status === 'rejected') {
+        statusEmoji = '❌';
+        statusText = 'Відхилено';
+      } else if (status === 'pending_hr') {
+        statusText = 'Очікує HR';
+      } else if (status === 'pending_pm') {
+        statusText = 'Очікує PM';
+      }
+      
+      const typeText = requestType === 'emergency' ? '🚨 Екстрена' : '📝 Звичайна';
+      
+      text += `${index + 1}. ${statusEmoji} <b>${statusText}</b> ${typeText}\n`;
+      text += `   📅 ${startDate} - ${endDate} (${days} днів)\n\n`;
+    });
+    
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '⬅️ Назад до відпусток', callback_data: 'vacation_apply' }]
+      ]
+    };
+    
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showMyVacationRequests:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження заявок.');
   }
 }
 
@@ -1574,6 +1700,9 @@ async function showHRPanel(chatId, telegramId) {
         ],
         [
           { text: '📢 Розсилки', callback_data: 'hr_mailings' },
+          { text: '📤 Експорт даних', callback_data: 'hr_export' }
+        ],
+        [
           { text: '⚙️ Налаштування', callback_data: 'hr_settings' }
         ],
         [
@@ -2390,8 +2519,8 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     
     // Перевіряємо баланс відпусток
     const balance = await getVacationBalance(telegramId);
-    if (balance < days) {
-      await sendMessage(chatId, `❌ Недостатньо днів відпустки. Доступно: ${balance} днів, потрібно: ${days} днів.`);
+    if (balance.available < days) {
+      await sendMessage(chatId, `❌ Недостатньо днів відпустки. Доступно: ${balance.available} днів, потрібно: ${days} днів.`);
       return;
     }
     
@@ -2460,26 +2589,37 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
     if (!doc) return [];
     
     await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['VacationRequests'];
+    let sheet = doc.sheetsByTitle['Vacations'];
     if (!sheet) return [];
     
     const rows = await sheet.getRows();
     const conflicts = [];
     
     for (const row of rows) {
-      if (excludeUserId && row.TelegramID === excludeUserId) continue;
-      if (row.Status !== 'approved' && row.Status !== 'pending_pm') continue;
-      if (row.Department !== department || row.Team !== team) continue;
+      const rowTelegramId = row.get('TelegramID');
+      if (excludeUserId && rowTelegramId == excludeUserId) continue;
       
-      const rowStartDate = new Date(row.StartDate);
-      const rowEndDate = new Date(row.EndDate);
+      const rowStatus = row.get('Status');
+      // Перевіряємо тільки затверджені та очікуючі затвердження заявки
+      if (rowStatus !== 'approved' && rowStatus !== 'pending_pm' && rowStatus !== 'pending_hr') continue;
+      
+      const rowDepartment = row.get('Department');
+      const rowTeam = row.get('Team');
+      if (rowDepartment !== department || rowTeam !== team) continue;
+      
+      const rowStartDateStr = row.get('StartDate');
+      const rowEndDateStr = row.get('EndDate');
+      if (!rowStartDateStr || !rowEndDateStr) continue;
+      
+      const rowStartDate = new Date(rowStartDateStr);
+      const rowEndDate = new Date(rowEndDateStr);
       
       // Перевіряємо перетин дат
       if (startDate <= rowEndDate && endDate >= rowStartDate) {
         conflicts.push({
-          fullName: row.FullName,
-          department: row.Department,
-          team: row.Team,
+          fullName: row.get('FullName'),
+          department: rowDepartment,
+          team: rowTeam,
           startDate: formatDate(rowStartDate),
           endDate: formatDate(rowEndDate)
         });
@@ -2926,6 +3066,460 @@ async function updateVacationBalance(telegramId, user, usedDays) {
 }
 
 // Форматування дати
+// 📤 ЕКСПОРТ ДАНИХ ДЛЯ HR/CEO
+
+// 📤 Меню експорту для HR
+async function showHRExportMenu(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR та CEO.');
+      return;
+    }
+    
+    const text = `📤 <b>Експорт даних</b>
+
+Оберіть тип експорту:`;
+    
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '👤 По працівнику', callback_data: 'hr_export_employee' },
+          { text: '🏢 По відділу', callback_data: 'hr_export_department' }
+        ],
+        [
+          { text: '⬅️ Назад до HR панелі', callback_data: 'hr_panel' }
+        ]
+      ]
+    };
+    
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showHRExportMenu:', error);
+  }
+}
+
+// 📤 Меню експорту для CEO
+async function showCEOExportMenu(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для CEO.');
+      return;
+    }
+    
+    const text = `📤 <b>Експорт даних</b>
+
+Оберіть тип експорту:`;
+    
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '👤 По працівнику', callback_data: 'ceo_export_employee' },
+          { text: '🏢 По відділу', callback_data: 'ceo_export_department' }
+        ],
+        [
+          { text: '⬅️ Назад до CEO панелі', callback_data: 'ceo_panel' }
+        ]
+      ]
+    };
+    
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showCEOExportMenu:', error);
+  }
+}
+
+// 📤 Експорт даних по працівнику (HR)
+async function showHRExportEmployee(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    const employeesSheet = doc.sheetsByTitle['Employees'];
+    if (!employeesSheet) {
+      await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
+      return;
+    }
+    
+    const rows = await employeesSheet.getRows();
+    const employees = rows.map(row => ({
+      telegramId: row.get('TelegramID'),
+      fullName: row.get('FullName'),
+      department: row.get('Department'),
+      team: row.get('Team')
+    })).filter(emp => emp.telegramId);
+    
+    if (employees.length === 0) {
+      await sendMessage(chatId, '❌ Працівники не знайдені.');
+      return;
+    }
+    
+    // Групуємо по відділах для зручності
+    const departments = {};
+    employees.forEach(emp => {
+      if (!departments[emp.department]) {
+        departments[emp.department] = [];
+      }
+      departments[emp.department].push(emp);
+    });
+    
+    let text = `👤 <b>Експорт даних по працівнику</b>\n\n`;
+    text += `Оберіть працівника:\n\n`;
+    
+    const keyboard = {
+      inline_keyboard: []
+    };
+    
+    Object.keys(departments).forEach(dept => {
+      text += `🏢 <b>${dept}</b>\n`;
+      departments[dept].forEach(emp => {
+        const callbackData = `hr_export_emp_${emp.telegramId}`;
+        keyboard.inline_keyboard.push([
+          { text: `👤 ${emp.fullName} (${emp.team})`, callback_data: callbackData }
+        ]);
+      });
+      text += `\n`;
+    });
+    
+    keyboard.inline_keyboard.push([
+      { text: '⬅️ Назад', callback_data: 'hr_export' }
+    ]);
+    
+    // Розбиваємо на кілька повідомлень, якщо кнопок багато
+    if (keyboard.inline_keyboard.length > 10) {
+      await sendMessage(chatId, text.substring(0, 4000));
+      // Відправляємо кнопки окремо
+      const buttonsKeyboard = {
+        inline_keyboard: keyboard.inline_keyboard.slice(0, 10).concat([
+          [{ text: '⬅️ Назад', callback_data: 'hr_export' }]
+        ])
+      };
+      await sendMessage(chatId, 'Оберіть працівника:', buttonsKeyboard);
+    } else {
+      await sendMessage(chatId, text, keyboard);
+    }
+  } catch (error) {
+    console.error('❌ Помилка showHRExportEmployee:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження списку працівників.');
+  }
+}
+
+// 📤 Експорт даних по працівнику (CEO)
+async function showCEOExportEmployee(chatId, telegramId) {
+  // Використовуємо ту саму логіку, що й для HR
+  await showHRExportEmployee(chatId, telegramId);
+}
+
+// 📤 Експорт даних по відділу (HR)
+async function showHRExportDepartment(chatId, telegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    const employeesSheet = doc.sheetsByTitle['Employees'];
+    if (!employeesSheet) {
+      await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
+      return;
+    }
+    
+    const rows = await employeesSheet.getRows();
+    const departments = new Set();
+    rows.forEach(row => {
+      const dept = row.get('Department');
+      if (dept) departments.add(dept);
+    });
+    
+    if (departments.size === 0) {
+      await sendMessage(chatId, '❌ Відділи не знайдені.');
+      return;
+    }
+    
+    let text = `🏢 <b>Експорт даних по відділу</b>\n\n`;
+    text += `Оберіть відділ:\n\n`;
+    
+    const keyboard = {
+      inline_keyboard: []
+    };
+    
+    Array.from(departments).sort().forEach(dept => {
+      keyboard.inline_keyboard.push([
+        { text: `🏢 ${dept}`, callback_data: `hr_export_dept_${dept}` }
+      ]);
+    });
+    
+    keyboard.inline_keyboard.push([
+      { text: '⬅️ Назад', callback_data: 'hr_export' }
+    ]);
+    
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showHRExportDepartment:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження списку відділів.');
+  }
+}
+
+// 📤 Експорт даних по відділу (CEO)
+async function showCEOExportDepartment(chatId, telegramId) {
+  // Використовуємо ту саму логіку, що й для HR
+  await showHRExportDepartment(chatId, telegramId);
+}
+
+// 📊 Експорт даних конкретного працівника
+async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    const user = await getUserInfo(targetTelegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Працівник не знайдений.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    
+    // Збираємо дані про відпустки
+    const vacationsSheet = doc.sheetsByTitle['Vacations'];
+    const vacations = vacationsSheet ? (await vacationsSheet.getRows()).filter(row => 
+      row.get('TelegramID') == targetTelegramId
+    ) : [];
+    
+    // Збираємо дані про спізнення
+    const lateSheet = doc.sheetsByTitle['Late'];
+    const lateRecords = lateSheet ? (await lateSheet.getRows()).filter(row => 
+      row.get('TelegramID') == targetTelegramId
+    ) : [];
+    
+    // Збираємо дані про Remote
+    const remoteSheet = doc.sheetsByTitle['Remote'];
+    const remoteRecords = remoteSheet ? (await remoteSheet.getRows()).filter(row => 
+      row.get('TelegramID') == targetTelegramId
+    ) : [];
+    
+    // Збираємо дані про лікарняні
+    const sickSheet = doc.sheetsByTitle['Sick'];
+    const sickRecords = sickSheet ? (await sickSheet.getRows()).filter(row => 
+      row.get('TelegramID') == targetTelegramId
+    ) : [];
+    
+    // Формуємо звіт
+    let report = `📊 <b>Звіт по працівнику</b>\n\n`;
+    report += `👤 <b>Працівник:</b> ${user.fullName}\n`;
+    report += `🏢 <b>Відділ:</b> ${user.department}\n`;
+    report += `👥 <b>Команда:</b> ${user.team}\n`;
+    report += `💼 <b>Посада:</b> ${user.position || 'Не вказано'}\n\n`;
+    
+    report += `🏖️ <b>ВІДПУСТКИ</b>\n`;
+    report += `Загалом заявок: ${vacations.length}\n`;
+    const approvedVacations = vacations.filter(v => v.get('Status') === 'approved');
+    const usedDays = approvedVacations.reduce((sum, v) => sum + (parseInt(v.get('Days')) || 0), 0);
+    report += `Затверджено: ${approvedVacations.length}\n`;
+    report += `Використано днів: ${usedDays}\n\n`;
+    
+    if (vacations.length > 0) {
+      report += `Останні 5 заявок:\n`;
+      vacations.slice(-5).reverse().forEach(v => {
+        const status = v.get('Status');
+        const statusEmoji = status === 'approved' ? '✅' : status === 'rejected' ? '❌' : '⏳';
+        report += `${statusEmoji} ${v.get('StartDate')} - ${v.get('EndDate')} (${v.get('Days')} днів) - ${status}\n`;
+      });
+      report += `\n`;
+    }
+    
+    report += `⏰ <b>СПІЗНЕННЯ</b>\n`;
+    report += `Загалом записів: ${lateRecords.length}\n`;
+    const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
+    const thisMonthLate = lateRecords.filter(r => {
+      const date = new Date(r.get('Date'));
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    report += `У поточному місяці: ${thisMonthLate.length}\n\n`;
+    
+    report += `🏠 <b>REMOTE</b>\n`;
+    report += `Загалом записів: ${remoteRecords.length}\n`;
+    const thisMonthRemote = remoteRecords.filter(r => {
+      const date = new Date(r.get('Date'));
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    report += `У поточному місяці: ${thisMonthRemote.length}\n\n`;
+    
+    report += `🏥 <b>ЛІКАРНЯНІ</b>\n`;
+    report += `Загалом записів: ${sickRecords.length}\n`;
+    const thisMonthSick = sickRecords.filter(r => {
+      const date = new Date(r.get('Date'));
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    report += `У поточному місяці: ${thisMonthSick.length}\n`;
+    
+    // Розбиваємо на частини, якщо занадто довгий
+    if (report.length > 4000) {
+      const parts = report.match(/.{1,4000}/g) || [];
+      for (const part of parts) {
+        await sendMessage(chatId, part);
+      }
+    } else {
+      await sendMessage(chatId, report);
+    }
+    
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '⬅️ Назад', callback_data: role === 'CEO' ? 'ceo_export' : 'hr_export' }]
+      ]
+    };
+    await sendMessage(chatId, 'Оберіть наступну дію:', keyboard);
+    
+  } catch (error) {
+    console.error('❌ Помилка exportEmployeeData:', error);
+    await sendMessage(chatId, '❌ Помилка експорту даних.');
+  }
+}
+
+// 📊 Експорт даних по відділу
+async function exportDepartmentData(chatId, telegramId, department) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    
+    // Отримуємо всіх працівників відділу
+    const employeesSheet = doc.sheetsByTitle['Employees'];
+    if (!employeesSheet) {
+      await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
+      return;
+    }
+    
+    const rows = await employeesSheet.getRows();
+    const employees = rows.filter(row => row.get('Department') === department);
+    
+    if (employees.length === 0) {
+      await sendMessage(chatId, `❌ У відділі ${department} немає працівників.`);
+      return;
+    }
+    
+    // Збираємо статистику
+    let report = `📊 <b>Звіт по відділу: ${department}</b>\n\n`;
+    report += `👥 <b>Кількість працівників:</b> ${employees.length}\n\n`;
+    
+    // Статистика по відпустках
+    const vacationsSheet = doc.sheetsByTitle['Vacations'];
+    const departmentVacations = vacationsSheet ? (await vacationsSheet.getRows()).filter(row => 
+      row.get('Department') === department
+    ) : [];
+    
+    report += `🏖️ <b>ВІДПУСТКИ</b>\n`;
+    report += `Загалом заявок: ${departmentVacations.length}\n`;
+    const approvedVac = departmentVacations.filter(v => v.get('Status') === 'approved');
+    report += `Затверджено: ${approvedVac.length}\n`;
+    const usedDays = approvedVac.reduce((sum, v) => sum + (parseInt(v.get('Days')) || 0), 0);
+    report += `Використано днів: ${usedDays}\n\n`;
+    
+    // Статистика по спізненнях
+    const lateSheet = doc.sheetsByTitle['Late'];
+    const departmentLate = lateSheet ? (await lateSheet.getRows()).filter(row => {
+      const empTelegramId = row.get('TelegramID');
+      return employees.some(emp => emp.get('TelegramID') == empTelegramId);
+    }) : [];
+    
+    report += `⏰ <b>СПІЗНЕННЯ</b>\n`;
+    report += `Загалом записів: ${departmentLate.length}\n`;
+    const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
+    const thisMonthLate = departmentLate.filter(r => {
+      const date = new Date(r.get('Date'));
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    report += `У поточному місяці: ${thisMonthLate.length}\n\n`;
+    
+    // Статистика по Remote
+    const remoteSheet = doc.sheetsByTitle['Remote'];
+    const departmentRemote = remoteSheet ? (await remoteSheet.getRows()).filter(row => {
+      const empTelegramId = row.get('TelegramID');
+      return employees.some(emp => emp.get('TelegramID') == empTelegramId);
+    }) : [];
+    
+    report += `🏠 <b>REMOTE</b>\n`;
+    report += `Загалом записів: ${departmentRemote.length}\n`;
+    const thisMonthRemote = departmentRemote.filter(r => {
+      const date = new Date(r.get('Date'));
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    report += `У поточному місяці: ${thisMonthRemote.length}\n\n`;
+    
+    // Статистика по лікарняних
+    const sickSheet = doc.sheetsByTitle['Sick'];
+    const departmentSick = sickSheet ? (await sickSheet.getRows()).filter(row => {
+      const empTelegramId = row.get('TelegramID');
+      return employees.some(emp => emp.get('TelegramID') == empTelegramId);
+    }) : [];
+    
+    report += `🏥 <b>ЛІКАРНЯНІ</b>\n`;
+    report += `Загалом записів: ${departmentSick.length}\n`;
+    const thisMonthSick = departmentSick.filter(r => {
+      const date = new Date(r.get('Date'));
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    report += `У поточному місяці: ${thisMonthSick.length}\n`;
+    
+    // Розбиваємо на частини, якщо занадто довгий
+    if (report.length > 4000) {
+      const parts = report.match(/.{1,4000}/g) || [];
+      for (const part of parts) {
+        await sendMessage(chatId, part);
+      }
+    } else {
+      await sendMessage(chatId, report);
+    }
+    
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '⬅️ Назад', callback_data: role === 'CEO' ? 'ceo_export' : 'hr_export' }]
+      ]
+    };
+    await sendMessage(chatId, 'Оберіть наступну дію:', keyboard);
+    
+  } catch (error) {
+    console.error('❌ Помилка exportDepartmentData:', error);
+    await sendMessage(chatId, '❌ Помилка експорту даних.');
+  }
+}
+
 function formatDate(date) {
   return date.toLocaleDateString('uk-UA', {
     day: '2-digit',
@@ -3147,14 +3741,24 @@ async function handleRemoteProcess(chatId, telegramId, text) {
       }
       
       // Перевірка: повідомлення має бути до 19:00 попереднього дня
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
       
-      if (date < tomorrow) {
-        await sendMessage(chatId, '⚠️ Повідомлення про Remote має бути до 19:00 дня передуючого залишенню вдома.');
+      // Якщо дата Remote сьогодні або в минулому - не дозволяємо
+      if (date < today) {
+        await sendMessage(chatId, '⚠️ Не можна вказати дату в минулому.');
         return true;
+      }
+      
+      // Якщо дата Remote завтра або раніше - перевіряємо час
+      if (date <= tomorrow) {
+        const currentHour = now.getHours();
+        if (currentHour >= 19 && date.getTime() === tomorrow.getTime()) {
+          await sendMessage(chatId, '⚠️ Повідомлення про Remote на завтра має бути до 19:00 сьогодні.');
+          return true;
+        }
       }
       
       regData.data.date = date;
