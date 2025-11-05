@@ -2227,8 +2227,8 @@ async function showCompanyRules(chatId, telegramId) {
 
 <b>Робочий режим:</b>
 • Пн-Пт 10:00-18:00
-• Спізнення з 10:21
-• Remote до 10:30 (ліміт 14 днів/міс для офлайн/гібрид)
+• Спізнення з 11:01
+• Remote до 19:00 дня передуючого залишенню вдома
 
 <b>Відпустки:</b>
 • Мін 1 день, макс 7 календарних днів за раз
@@ -3312,13 +3312,13 @@ async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
     ) : [];
     
     // Збираємо дані про спізнення
-    const lateSheet = doc.sheetsByTitle['Late'];
+    const lateSheet = doc.sheetsByTitle['Lates'];
     const lateRecords = lateSheet ? (await lateSheet.getRows()).filter(row => 
       row.get('TelegramID') == targetTelegramId
     ) : [];
     
     // Збираємо дані про Remote
-    const remoteSheet = doc.sheetsByTitle['Remote'];
+    const remoteSheet = doc.sheetsByTitle['Remotes'];
     const remoteRecords = remoteSheet ? (await remoteSheet.getRows()).filter(row => 
       row.get('TelegramID') == targetTelegramId
     ) : [];
@@ -3451,7 +3451,7 @@ async function exportDepartmentData(chatId, telegramId, department) {
     report += `Використано днів: ${usedDays}\n\n`;
     
     // Статистика по спізненнях
-    const lateSheet = doc.sheetsByTitle['Late'];
+    const lateSheet = doc.sheetsByTitle['Lates'];
     const departmentLate = lateSheet ? (await lateSheet.getRows()).filter(row => {
       const empTelegramId = row.get('TelegramID');
       return employees.some(emp => emp.get('TelegramID') == empTelegramId);
@@ -3468,7 +3468,7 @@ async function exportDepartmentData(chatId, telegramId, department) {
     report += `У поточному місяці: ${thisMonthLate.length}\n\n`;
     
     // Статистика по Remote
-    const remoteSheet = doc.sheetsByTitle['Remote'];
+    const remoteSheet = doc.sheetsByTitle['Remotes'];
     const departmentRemote = remoteSheet ? (await remoteSheet.getRows()).filter(row => {
       const empTelegramId = row.get('TelegramID');
       return employees.some(emp => emp.get('TelegramID') == empTelegramId);
