@@ -611,7 +611,15 @@ async function processCallback(callbackQuery) {
       'suggestions_anonymous': () => showAnonymousSuggestionsForm(chatId, telegramId),
       'suggestions_named': () => showNamedSuggestionsForm(chatId, telegramId),
       'suggestions_view': () => showMySuggestions(chatId, telegramId),
-      'asap_form': () => showASAPForm(chatId, telegramId),
+      'asap_menu': () => showASAPMenu(chatId, telegramId),
+      'asap_category_conflict': () => showASAPCategoryForm(chatId, telegramId, 'conflict'),
+      'asap_category_health': () => showASAPCategoryForm(chatId, telegramId, 'health'),
+      'asap_category_finance': () => showASAPCategoryForm(chatId, telegramId, 'finance'),
+      'asap_category_legal': () => showASAPCategoryForm(chatId, telegramId, 'legal'),
+      'asap_category_workplace': () => showASAPCategoryForm(chatId, telegramId, 'workplace'),
+      'asap_category_team': () => showASAPCategoryForm(chatId, telegramId, 'team'),
+      'asap_category_security': () => showASAPCategoryForm(chatId, telegramId, 'security'),
+      'asap_category_other': () => showASAPCategoryForm(chatId, telegramId, 'other'),
       'faq_category': () => showFAQCategory(chatId, telegramId),
       // AI помічник видалено
       'approvals_vacations': () => showApprovalVacations(chatId, telegramId),
@@ -1159,8 +1167,9 @@ async function handleRegistrationStep(chatId, telegramId, text) {
         break;
 
       case 'asap_message':
-        // Обробка ASAP запиту
-        await processASAPRequest(chatId, telegramId, text);
+        // Обробка ASAP запиту з категорією
+        const category = regData.category || 'other';
+        await processASAPRequest(chatId, telegramId, text, category);
         // Очищаємо кеш після обробки
         registrationCache.delete(telegramId);
         break;
@@ -1715,12 +1724,25 @@ async function showASAPMenu(chatId, telegramId) {
 
 Термінові питання, які потребують негайної уваги HR.
 
-Оберіть дію:`;
+Оберіть категорію запиту:`;
 
     const keyboard = {
       inline_keyboard: [
         [
-          { text: '🚨 Надіслати ASAP запит', callback_data: 'asap_form' }
+          { text: '💼 Конфлікт/Проблема', callback_data: 'asap_category_conflict' },
+          { text: '🏥 Здоров\'я/Медицина', callback_data: 'asap_category_health' }
+        ],
+        [
+          { text: '💰 Фінанси/Зарплата', callback_data: 'asap_category_finance' },
+          { text: '📋 Документи/Юридичне', callback_data: 'asap_category_legal' }
+        ],
+        [
+          { text: '🏢 Робоче місце/Офіс', callback_data: 'asap_category_workplace' },
+          { text: '👥 Стосунки в команді', callback_data: 'asap_category_team' }
+        ],
+        [
+          { text: '🔒 Безпека/Конфіденційність', callback_data: 'asap_category_security' },
+          { text: '❓ Інше', callback_data: 'asap_category_other' }
         ],
         [
           { text: '⬅️ Назад', callback_data: 'back_to_main' }
@@ -1734,37 +1756,50 @@ async function showASAPMenu(chatId, telegramId) {
   }
 }
 
-// 🚨 ФОРМА ASAP ЗАПИТУ
-async function showASAPForm(chatId, telegramId) {
+// 🚨 ВИБІР КАТЕГОРІЇ ASAP ЗАПИТУ
+async function showASAPCategoryForm(chatId, telegramId, category) {
   try {
-    const user = await getUserInfo(telegramId);
+    const categoryNames = {
+      'conflict': 'Конфлікт/Проблема',
+      'health': 'Здоров\'я/Медицина',
+      'finance': 'Фінанси/Зарплата',
+      'legal': 'Документи/Юридичне',
+      'workplace': 'Робоче місце/Офіс',
+      'team': 'Стосунки в команді',
+      'security': 'Безпека/Конфіденційність',
+      'other': 'Інше'
+    };
     
-    const text = `🚨 <b>ASAP Запит</b>
+    const user = await getUserInfo(telegramId);
+    const categoryName = categoryNames[category] || 'Інше';
+    
+    const text = `🚨 <b>ASAP Запит: ${categoryName}</b>
 
 👤 ${user?.FullName || 'Користувач'}
 🏢 ${user?.Department || ''}${user?.Team ? ' / ' + user.Team : ''}
 
-📝 <b>Опишіть вашу проблему, яка потребує негайного вирішення:</b>
+📝 <b>Опишіть вашу проблему детально:</b>
 
 <i>Напишіть повідомлення, і воно буде одразу відправлено HR для розгляду.</i>`;
 
     const keyboard = {
       inline_keyboard: [
         [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
+          { text: '⬅️ Назад', callback_data: 'asap_menu' }
         ]
       ]
     };
 
     await sendMessage(chatId, text, keyboard);
     
-    // Встановлюємо крок для обробки тексту
+    // Встановлюємо крок для обробки тексту з категорією
     registrationCache.set(telegramId, {
       step: 'asap_message',
+      category: category,
       timestamp: Date.now()
     });
   } catch (error) {
-    console.error('❌ Помилка showASAPForm:', error);
+    console.error('❌ Помилка showASAPCategoryForm:', error);
   }
 }
 
@@ -4196,13 +4231,14 @@ async function showSickStats(chatId, telegramId) {
 
 // 🚨 ОБРОБКА ASAP ЗАПИТУ
 /**
- * Обробляє ASAP запит від користувача
+ * Обробляє ASAP запит від користувача з категорією
  * @param {number} chatId - ID чату
  * @param {number} telegramId - Telegram ID користувача
  * @param {string} message - Текст запиту
+ * @param {string} category - Категорія запиту (conflict, health, finance, legal, workplace, team, security, other)
  * @returns {Promise<void>}
  */
-async function processASAPRequest(chatId, telegramId, message) {
+async function processASAPRequest(chatId, telegramId, message, category = 'other') {
   return executeWithRetryAndMonitor(
     async () => {
       if (!doc) throw new Error('Google Sheets не підключено');
@@ -4212,47 +4248,91 @@ async function processASAPRequest(chatId, telegramId, message) {
         throw new Error('Користувач не знайдено');
       }
       
+      // Мапінг категорій на назви таблиць
+      const categoryToSheet = {
+        'conflict': 'ASAP_Конфлікти',
+        'health': 'ASAP_Здоров\'я',
+        'finance': 'ASAP_Фінанси',
+        'legal': 'ASAP_Документи',
+        'workplace': 'ASAP_РобочеМісце',
+        'team': 'ASAP_Команда',
+        'security': 'ASAP_Безпека',
+        'other': 'ASAP_Інше'
+      };
+      
+      const categoryNames = {
+        'conflict': 'Конфлікт/Проблема',
+        'health': 'Здоров\'я/Медицина',
+        'finance': 'Фінанси/Зарплата',
+        'legal': 'Документи/Юридичне',
+        'workplace': 'Робоче місце/Офіс',
+        'team': 'Стосунки в команді',
+        'security': 'Безпека/Конфіденційність',
+        'other': 'Інше'
+      };
+      
+      const sheetName = categoryToSheet[category] || categoryToSheet['other'];
+      const categoryName = categoryNames[category] || 'Інше';
+      
       await doc.loadInfo();
-      let sheet = doc.sheetsByTitle['ASAP_Requests'];
-      if (!sheet) {
-        sheet = await doc.addSheet({
+      
+      // 1. Головна таблиця з усіма ASAP запитами
+      let mainSheet = doc.sheetsByTitle['ASAP_Requests'];
+      if (!mainSheet) {
+        mainSheet = await doc.addSheet({
           title: 'ASAP_Requests',
           headerValues: [
-            'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'Message', 'CreatedAt', 'Status'
+            'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'Category', 'Message', 'CreatedAt', 'Status'
           ]
         });
       }
       
-      const requestId = `ASAP_${Date.now()}_${telegramId}`;
+      // 2. Окрема таблиця по категорії
+      let categorySheet = doc.sheetsByTitle[sheetName];
+      if (!categorySheet) {
+        categorySheet = await doc.addSheet({
+          title: sheetName,
+          headerValues: [
+            'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'Category', 'Message', 'CreatedAt', 'Status'
+          ]
+        });
+      }
+      
+      const requestId = `ASAP_${category.toUpperCase()}_${Date.now()}_${telegramId}`;
       const now = new Date();
       
-      await sheet.addRow({
+      const rowData = {
         RequestID: requestId,
         TelegramID: telegramId,
         FullName: user.fullName || user.FullName || 'Невідомо',
         Department: user.department || user.Department || 'Невідомо',
         Team: user.team || user.Team || 'Невідомо',
+        Category: categoryName,
         Message: message,
         CreatedAt: now.toISOString(),
         Status: 'pending'
-      });
+      };
       
-      console.log(`✅ Збережено ASAP запит: ${requestId}`);
+      // Зберігаємо в обидві таблиці
+      await mainSheet.addRow(rowData);
+      await categorySheet.addRow(rowData);
+      
+      console.log(`✅ Збережено ASAP запит: ${requestId} в таблицю ${sheetName} та в головну таблицю ASAP_Requests`);
       
       // Підтвердження користувачу
-      await sendMessage(chatId, `✅ <b>ASAP запит відправлено!</b>\n\n📝 <b>Ваше повідомлення:</b>\n"${message}"\n\n⏰ HR отримає повідомлення негайно.`);
+      await sendMessage(chatId, `✅ <b>ASAP запит відправлено!</b>\n\n📂 <b>Категорія:</b> ${categoryName}\n📝 <b>Ваше повідомлення:</b>\n"${message}"\n\n⏰ HR отримає повідомлення негайно.`);
       
       // Негайне повідомлення HR
       if (HR_CHAT_ID) {
-        const hrMessage = `🚨 <b>ASAP ЗАПИТ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName || user.FullName || 'Невідомо'}\n🏢 <b>Відділ:</b> ${user.department || user.Department || 'Невідомо'}\n👥 <b>Команда:</b> ${user.team || user.Team || 'Невідомо'}\n\n📝 <b>Повідомлення:</b>\n${message}\n\n⏰ <b>Час:</b> ${now.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' })}\n\n🆔 <b>ID запиту:</b> ${requestId}`;
+        const hrMessage = `🚨 <b>ASAP ЗАПИТ</b>\n\n📂 <b>Категорія:</b> ${categoryName}\n\n👤 <b>Співробітник:</b> ${user.fullName || user.FullName || 'Невідомо'}\n🏢 <b>Відділ:</b> ${user.department || user.Department || 'Невідомо'}\n👥 <b>Команда:</b> ${user.team || user.Team || 'Невідомо'}\n\n📝 <b>Повідомлення:</b>\n${message}\n\n⏰ <b>Час:</b> ${now.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' })}\n\n🆔 <b>ID запиту:</b> ${requestId}\n📊 <b>Таблиця:</b> ${sheetName}`;
         await sendMessage(HR_CHAT_ID, hrMessage);
         console.log(`✅ Відправлено ASAP запит HR: ${requestId}`);
       }
     },
     'processASAPRequest',
-    { telegramId }
+    { telegramId, category }
   ).catch(error => {
-    logger.error('Failed to process ASAP request after retries', error, { telegramId });
+    logger.error('Failed to process ASAP request after retries', error, { telegramId, category });
     sendMessage(chatId, '❌ Помилка відправки ASAP запиту. Спробуйте пізніше.');
     throw error;
   });

@@ -154,3 +154,4 @@ curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getWebhookInfo"
 **Дата:** $(date)
 **Версія:** 2.0.0-webhook-optimization
 
+
