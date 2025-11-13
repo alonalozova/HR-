@@ -5,7 +5,8 @@
 
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
-const { DatabaseError, logger } = require('../utils/errors');
+const { DatabaseError } = require('../utils/errors');
+const logger = require('../utils/logger');
 
 class SheetsService {
   constructor() {

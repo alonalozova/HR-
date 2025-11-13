@@ -1,98 +1,63 @@
 /**
- * 🔍 ВАЛІДАЦІЯ ДАНИХ
- * Утиліти для перевірки та валідації
+ * Утиліти для валідації
  */
-
-const { ValidationError } = require('./errors');
 
 /**
- * Валідація дати у форматі ДД.ММ.РРРР
+ * Перевіряє чи дата валідна
  */
-function validateDate(dateString) {
-  const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
-  const match = dateString.match(dateRegex);
+function isValidDate(dateString) {
+  if (!dateString) return false;
   
-  if (!match) {
-    throw new ValidationError('Невірний формат дати. Використовуйте ДД.ММ.РРРР (наприклад: 11.11.2025)', 'date');
-  }
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return false;
   
-  const day = parseInt(match[1]);
-  const month = parseInt(match[2]);
-  const year = parseInt(match[3]);
+  // Перевірка формату DD.MM.YYYY
+  const dateRegex = /^(\d{2})\.(\d{2})\.(\d{4})$/;
+  if (!dateRegex.test(dateString)) return false;
   
-  // Перевіряємо валідність дати
-  const date = new Date(year, month - 1, day);
-  if (date.getDate() !== day || date.getMonth() !== month - 1 || date.getFullYear() !== year) {
-    throw new ValidationError('Невірна дата. Перевірте правильність введених даних.', 'date');
-  }
+  const [, day, month, year] = dateString.match(dateRegex);
+  const parsedDate = new Date(year, month - 1, day);
   
-  // Перевіряємо, що дата не в минулому
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (date < today) {
-    throw new ValidationError('Дата не може бути в минулому.', 'date');
-  }
-  
-  return date;
+  return parsedDate.getDate() == day && 
+         parsedDate.getMonth() == month - 1 && 
+         parsedDate.getFullYear() == year;
 }
 
 /**
- * Валідація кількості днів відпустки
- */
-function validateVacationDays(days) {
-  const numDays = parseInt(days);
-  
-  if (isNaN(numDays)) {
-    throw new ValidationError('Кількість днів має бути числом.', 'days');
-  }
-  
-  if (numDays < 1 || numDays > 7) {
-    throw new ValidationError('Кількість днів має бути від 1 до 7.', 'days');
-  }
-  
-  return numDays;
-}
-
-/**
- * Валідація Telegram ID
- */
-function validateTelegramId(telegramId) {
-  if (!telegramId || typeof telegramId !== 'string' && typeof telegramId !== 'number') {
-    throw new ValidationError('Невірний Telegram ID.', 'telegramId');
-  }
-  
-  return telegramId.toString();
-}
-
-/**
- * Форматування дати для відображення
+ * Форматує дату в формат DD.MM.YYYY
  */
 function formatDate(date) {
-  if (!(date instanceof Date)) {
-    return 'Невірна дата';
-  }
-  
-  return date.toLocaleDateString('uk-UA', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  });
+  if (!date) return '';
+  const d = new Date(date);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}.${month}.${year}`;
 }
 
 /**
- * Перевірка чи дата в минулому
+ * Парсить дату з формату DD.MM.YYYY
  */
-function isDateInPast(date) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return date < today;
+function parseDate(dateString) {
+  if (!isValidDate(dateString)) return null;
+  
+  const [day, month, year] = dateString.split('.');
+  return new Date(year, month - 1, day);
+}
+
+/**
+ * Обчислює різницю в днях між двома датами
+ */
+function daysBetween(date1, date2) {
+  const oneDay = 24 * 60 * 60 * 1000;
+  const firstDate = new Date(date1);
+  const secondDate = new Date(date2);
+  return Math.round(Math.abs((firstDate - secondDate) / oneDay));
 }
 
 module.exports = {
-  validateDate,
-  validateVacationDays,
-  validateTelegramId,
+  isValidDate,
   formatDate,
-  isDateInPast
+  parseDate,
+  daysBetween
 };
-

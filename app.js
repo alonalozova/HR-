@@ -1,71 +1,45 @@
 /**
  * 🏢 HR БОТ - МОДУЛЬНА ВЕРСІЯ
- * Комерційний HR бот з модульною архітектурою
- * Railway Deployment Ready
+ * Оптимізована версія з розділенням на модулі для покращення продуктивності
  */
 
-require('dotenv').config();
+// Імпорт модулів
 const express = require('express');
-
-// Імпорт сервісів
-const TelegramService = require('./services/telegram.service');
+const config = require('./config');
+const logger = require('./utils/logger');
+const CacheWithTTL = require('./utils/cache');
+const { AppError } = require('./utils/errors');
 const SheetsService = require('./services/sheets.service');
-const BulkService = require('./services/bulk.service');
-const SecurityService = require('./services/security.service');
+const TelegramService = require('./services/telegram.service');
+const UserService = require('./services/user.service');
 
-// Імпорт утиліт
-const { logger } = require('./utils/errors');
-const { userCache, registrationCache, processedUpdates } = require('./utils/cache');
-
-// ⚙️ НАЛАШТУВАННЯ
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const HR_CHAT_ID = process.env.HR_CHAT_ID;
-const PORT = process.env.PORT || 3000;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
-
-if (!BOT_TOKEN) {
-  logger.error('BOT_TOKEN не встановлено');
+// Перевірка конфігурації
+if (!config.BOT_TOKEN) {
+  logger.error('BOT_TOKEN не встановлено!');
   process.exit(1);
 }
 
-// Попередження про відсутні змінні
-if (!SPREADSHEET_ID) logger.warn('SPREADSHEET_ID не встановлено');
-if (!HR_CHAT_ID) {
-  logger.warn('HR_CHAT_ID не встановлено');
-  logger.warn('Для отримання заявок на відпустку встановіть HR_CHAT_ID в Railway');
-} else {
-  logger.success('HR_CHAT_ID налаштовано', { HR_CHAT_ID });
-}
-
-// 🤖 ІНІЦІАЛІЗАЦІЯ СЕРВІСІВ
-const telegramService = new TelegramService(BOT_TOKEN);
+// Ініціалізація сервісів
+const telegramService = new TelegramService(config.BOT_TOKEN);
 const sheetsService = new SheetsService();
-const bulkService = new BulkService(sheetsService);
-const securityService = new SecurityService();
+const userService = new UserService(sheetsService);
 
-// 🚀 EXPRESS APP
+// Кеші
+const processedUpdates = new CacheWithTTL(
+  config.CACHE.PROCESSED_UPDATES.maxSize,
+  config.CACHE.PROCESSED_UPDATES.ttl
+);
+const registrationCache = new CacheWithTTL(
+  config.CACHE.REGISTRATION_CACHE.maxSize,
+  config.CACHE.REGISTRATION_CACHE.ttl
+);
+
+// Express app
 const app = express();
+app.use(express.json());
 
-// 🏥 RAILWAY HEALTHCHECK - БЕЗ RATE LIMITING (має бути першим!)
-app.get('/railway-health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    version: '2.0.0-modular-security'
-  });
-});
-
-// 🛡️ SECURITY MIDDLEWARE (після railway-health)
-app.use(securityService.checkBlockedIP);
-app.use(securityService.logSuspiciousActivity);
-app.use(securityService.bruteForceProtection);
-
-app.use(express.json({ limit: '10mb' })); // Ліміт розміру JSON
-
-// Health check endpoints з rate limiting
+// Health check endpoints
 app.get('/', (req, res) => {
-  // Тимчасово без rate limiting для Railway healthcheck
   const userAgent = req.get('User-Agent') || '';
   const isRailwayHealth = userAgent.includes('Railway') || userAgent.includes('railway');
   
@@ -77,454 +51,203 @@ app.get('/', (req, res) => {
   });
   
   if (isRailwayHealth) {
-    // Швидкий відгук для Railway без rate limiting
-    logger.info('Railway health check - bypassing rate limit');
     return res.status(200).json({
       status: 'OK',
-      message: 'HR Bot Ultimate is running',
+      message: 'HR Bot Modular is running',
       timestamp: new Date().toISOString(),
-      port: PORT,
-      version: '2.0.0-modular-security'
+      version: '3.0.0-modular',
+      sheets_connected: sheetsService.isInitialized,
+      uptime: process.uptime()
     });
   }
   
-  // Для звичайних запитів використовуємо rate limiting
-  logger.info('Regular health check - using rate limit');
-  securityService.getRateLimiter('health')(req, res, () => {
-    res.status(200).json({
-      status: 'OK',
-      message: 'HR Bot Ultimate is running',
-      timestamp: new Date().toISOString(),
-      port: PORT,
-      version: '2.0.0-modular-security'
-    });
-  });
-});
-
-app.get('/health', securityService.getRateLimiter('health'), (req, res) => {
   res.status(200).json({
-    status: 'healthy',
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
+    status: 'OK',
+    message: 'HR Bot Modular is running',
     timestamp: new Date().toISOString(),
-    services: {
-      telegram: 'active',
-      sheets: sheetsService.isInitialized ? 'active' : 'inactive',
-      bulk: 'active',
-      security: 'active'
-    }
+    version: '3.0.0-modular',
+    sheets_connected: sheetsService.isInitialized,
+    uptime: process.uptime()
   });
 });
 
-// Bulk операції endpoint для HR панелі з rate limiting
-app.get('/api/stats/:year/:month', securityService.getRateLimiter('api'), async (req, res) => {
-  try {
-    const { year, month } = req.params;
-    const stats = await bulkService.getMonthlyStats(parseInt(month), parseInt(year));
-    res.json(stats);
-  } catch (error) {
-    logger.error('Error getting monthly stats', error);
-    res.status(500).json({ error: 'Failed to get monthly stats' });
-  }
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
 });
 
-// Очищення кешу endpoint з критичним rate limiting
-app.post('/api/cache/clear', securityService.getRateLimiter('critical'), (req, res) => {
-  try {
-    bulkService.clearAllCache();
-    res.json({ message: 'Cache cleared successfully' });
-  } catch (error) {
-    logger.error('Error clearing cache', error);
-    res.status(500).json({ error: 'Failed to clear cache' });
-  }
-});
-
-// Security статистика endpoint
-app.get('/api/security/stats', securityService.getRateLimiter('critical'), (req, res) => {
-  try {
-    const stats = securityService.getSecurityStats();
-    res.json(stats);
-  } catch (error) {
-    logger.error('Error getting security stats', error);
-    res.status(500).json({ error: 'Failed to get security stats' });
-  }
-});
-
-// Очищення блокувань endpoint (тільки для адміністратора)
-app.post('/api/security/clear-blocks', securityService.getRateLimiter('critical'), (req, res) => {
-  try {
-    securityService.clearAllBlocks();
-    res.json({ message: 'All security blocks cleared successfully' });
-  } catch (error) {
-    logger.error('Error clearing security blocks', error);
-    res.status(500).json({ error: 'Failed to clear security blocks' });
-  }
-});
-
-// Webhook endpoint з rate limiting та Telegram-специфічним захистом
-app.post('/webhook', securityService.getRateLimiter('telegram'), async (req, res) => {
+// Webhook endpoint - оптимізований для швидкої відповіді
+app.post('/webhook', async (req, res) => {
+  const startTime = Date.now();
+  
+  // Швидко відповідаємо Telegram
+  res.status(200).send('OK');
+  
   try {
     const update = req.body;
     
-    // Захист від дублювання
-    if (processedUpdates.has(update.update_id)) {
-      return res.status(200).json({ status: 'duplicate' });
+    if (!update || !update.update_id) {
+      logger.warn('Порожній або невалідний update');
+      return;
     }
     
-    processedUpdates.set(update.update_id, true);
+    // Перевірка на дублювання
+    const updateIdStr = String(update.update_id);
+    if (processedUpdates.has(updateIdStr)) {
+      logger.warn('Дублікат update_id', { updateId: updateIdStr });
+      return;
+    }
     
-    // Обробка повідомлень
+    processedUpdates.set(updateIdStr, true);
+    
+    // Ліниве завантаження handlers тільки коли потрібно
+    let messageHandler, callbackHandler;
+    
+    // Обробка повідомлення (асинхронно, неблокуюче)
     if (update.message) {
-      await handleMessage(update.message);
+      // Ліниве завантаження handler
+      if (!messageHandler) {
+        messageHandler = require('./handlers/message.handler');
+      }
+      
+      const message = update.message;
+      logger.info('Обробка повідомлення', { 
+        from_id: message.from?.id,
+        text: message.text?.substring(0, 50)
+      });
+      
+      messageHandler.handleMessage(
+        message,
+        {
+          telegramService,
+          userService,
+          sheetsService,
+          registrationCache,
+          config,
+          bot: telegramService.bot
+        }
+      ).catch(error => {
+        logger.error('Помилка обробки повідомлення', error, {
+          chat_id: message.chat?.id,
+          from_id: message.from?.id,
+          text: message.text?.substring(0, 100)
+        });
+      });
     } else if (update.callback_query) {
-      await handleCallback(update.callback_query);
+      // Ліниве завантаження handler
+      if (!callbackHandler) {
+        callbackHandler = require('./handlers/callback.handler');
+      }
+      
+      const callback = update.callback_query;
+      logger.info('Обробка callback', { 
+        from_id: callback.from?.id,
+        data: callback.data
+      });
+      
+      callbackHandler.handleCallback(
+        callback,
+        {
+          telegramService,
+          userService,
+          sheetsService,
+          registrationCache,
+          config,
+          bot: telegramService.bot
+        }
+      ).catch(error => {
+        logger.error('Помилка обробки callback', error);
+      });
+    } else {
+      logger.warn('Невідомий тип update', { keys: Object.keys(update) });
     }
     
-    res.status(200).json({ status: 'processed' });
+    const duration = Date.now() - startTime;
+    logger.info(`Webhook оброблено`, { duration: `${duration}ms` });
+    
   } catch (error) {
-    logger.error('Webhook error', error);
-    res.status(500).json({ status: 'error' });
+    const duration = Date.now() - startTime;
+    logger.error('Webhook error', error, { duration: `${duration}ms` });
   }
 });
 
-// Обробка повідомлень
-async function handleMessage(message) {
-  try {
-    const chatId = message.chat.id;
-    const telegramId = message.from.id;
-    const text = message.text;
-
-    logger.info('Processing message', { chatId, telegramId, text });
-
-    // Обробка команд
-    if (text === '/start') {
-      await showWelcomeMessage(chatId, telegramId);
-      return;
-    }
-
-    // Обробка відпусток
-    if (await handleVacationProcess(chatId, telegramId, text)) {
-      return;
-    }
-
-    // Обробка реєстрації
-    if (registrationCache.has(telegramId)) {
-      await handleRegistrationStep(chatId, telegramId, text);
-      return;
-    }
-
-    await telegramService.sendMessage(chatId, '❓ Оберіть дію з меню нижче.');
-
-  } catch (error) {
-    logger.error('Error handling message', error, { chatId: message.chat.id });
-  }
-}
-
-// Обробка callback кнопок
-async function handleCallback(callbackQuery) {
-  try {
-    const chatId = callbackQuery.message.chat.id;
-    const telegramId = callbackQuery.from.id;
-    const data = callbackQuery.data;
-
-    logger.info('Processing callback', { chatId, telegramId, data });
-
-    // Обробка різних callback'ів
-    if (data === 'vacation_menu') {
-      await showVacationMenu(chatId, telegramId);
-    } else if (data === 'vacation_apply') {
-      await showVacationForm(chatId, telegramId);
-    }
-    // Додати інші callback'и...
-
-    // Підтвердження отримання callback
-    await telegramService.bot.answerCallbackQuery(callbackQuery.id);
-
-  } catch (error) {
-    logger.error('Error handling callback', error, { chatId: callbackQuery.message?.chat?.id });
-  }
-}
-
-// Привітальне повідомлення
-async function showWelcomeMessage(chatId, telegramId) {
-  const text = `🎉 <b>Привіт зірочка!</b> 
-
-Я бот-помічник розроблений твоїм HR. Вона створила мене, щоб полегшити і автоматизувати процеси. Я точно стану тобі в нагоді.
-
-Почну з того, що прошу тебе зареєструватися. Це потрібно, аби надалі я міг допомагати тобі.`;
-
-  const keyboard = [
-    [{ text: '🏖️ Відпустки', callback_data: 'vacation_menu' }],
-    [{ text: '🏠 Remote', callback_data: 'remote_menu' }],
-    [{ text: '⏰ Спізнення', callback_data: 'late_menu' }],
-    [{ text: '🏥 Лікарняний', callback_data: 'sick_menu' }]
-  ];
-
-  await telegramService.sendReplyKeyboard(chatId, text, keyboard);
-}
-
-// Меню відпусток
-async function showVacationMenu(chatId, telegramId) {
-  const text = `🏖️ <b>Відпустки</b>
-
-Ваш баланс: 0/24 днів
-Доступно: 24 днів
-
-<b>Правила відпусток:</b>
-• Мін: 1 день, Макс: 7 днів за раз
-• 3 місяці до першої відпустки  
-• Накладки заборонені в команді
-• Процес: Ви → PM → HR
-
-Оберіть дію:`;
-
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '📝 Подати заявку', callback_data: 'vacation_apply' }],
-      [{ text: '🚨 Екстрена відпустка', callback_data: 'vacation_emergency' }],
-      [{ text: '📄 Мої заявки', callback_data: 'vacation_my_requests' }],
-      [{ text: '📊 Баланс деталі', callback_data: 'vacation_balance' }],
-      [{ text: '⬅️ Назад', callback_data: 'main_menu' }]
-    ]
-  };
-
-  await telegramService.sendInlineKeyboard(chatId, text, keyboard.inline_keyboard);
-}
-
-// Форма заявки на відпустку
-async function showVacationForm(chatId, telegramId) {
-  try {
-    // Перевіряємо чи користувач зареєстрований
-    const user = await getUserInfo(telegramId);
-    if (!user) {
-      await telegramService.sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
-      return;
-    }
-
-    const text = `📝 <b>Заявка на відпустку</b>
-
-👤 <b>Співробітник:</b> ${user.fullName}
-🏢 <b>Відділ:</b> ${user.department}
-👥 <b>Команда:</b> ${user.team}
-
-<b>Введіть дати відпустки:</b>
-
-📅 <b>Дата початку</b> (ДД.ММ.РРРР):`;
-
-    // Збережемо стан форми
-    registrationCache.set(telegramId, {
-      step: 'vacation_start_date',
-      data: { type: 'vacation' }
+// Обробка помилок Express
+app.use((error, req, res, next) => {
+  logger.error('Express error', error, {
+    url: req.url,
+    method: req.method,
+    body: req.body
+  });
+  
+  if (error instanceof AppError) {
+    res.status(error.statusCode).json({
+      error: error.message,
+      timestamp: error.timestamp,
+      context: error.context
     });
-
-    await telegramService.sendMessage(chatId, text);
-  } catch (error) {
-    logger.error('Error showing vacation form', error, { telegramId });
-    await telegramService.sendMessage(chatId, '❌ Помилка відкриття форми. Спробуйте пізніше.');
+  } else {
+    res.status(500).json({
+      error: 'Internal Server Error',
+      timestamp: new Date().toISOString()
+    });
   }
-}
+});
 
-// Обробка процесу відпусток
-async function handleVacationProcess(chatId, telegramId, text) {
-  try {
-    const regData = registrationCache.get(telegramId);
-    if (!regData) return false;
-
-    if (regData.step === 'vacation_start_date') {
-      const { validateDate } = require('./utils/validation');
-      
-      try {
-        const startDate = validateDate(text);
-        regData.data.startDate = startDate;
-        regData.step = 'vacation_days';
-        
-        await telegramService.sendMessage(chatId, `📅 <b>Дата початку:</b> ${text}\n\n📊 <b>Вкажіть кількість днів відпустки</b>\n\nВведіть кількість днів (1-7):`);
-        return true;
-      } catch (error) {
-        await telegramService.sendMessage(chatId, `❌ ${error.message}`);
-        return true;
-      }
-    }
-
-    if (regData.step === 'vacation_days') {
-      const { validateVacationDays } = require('./utils/validation');
-      
-      try {
-        const days = validateVacationDays(text);
-        regData.data.days = days;
-        
-        await processVacationRequest(chatId, telegramId, regData.data);
-        registrationCache.delete(telegramId);
-        return true;
-      } catch (error) {
-        await telegramService.sendMessage(chatId, `❌ ${error.message}`);
-        return true;
-      }
-    }
-
-    return false;
-  } catch (error) {
-    logger.error('Error in vacation process', error, { telegramId });
-    return false;
-  }
-}
-
-// Обробка заявки на відпустку
-async function processVacationRequest(chatId, telegramId, vacationData) {
-  try {
-    logger.info('Processing vacation request', { telegramId, vacationData });
-    
-    const user = await getUserInfo(telegramId);
-    if (!user) {
-      const { ValidationError } = require('./utils/errors');
-      throw new ValidationError('Користувач не знайдений. Пройдіть реєстрацію.', 'user');
-    }
-    
-    const { startDate, days } = vacationData;
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + days - 1);
-    
-    // Перевіряємо перетини
-    const conflicts = await checkVacationConflicts(user.department, user.team, startDate, endDate, telegramId);
-    
-    if (conflicts.length > 0) {
-      let conflictMessage = '⚠️ <b>Упс, твоя відпустка пересікається з Людинкою з твоєї команди:</b>\n\n';
-      conflicts.forEach(conflict => {
-        conflictMessage += `👤 ${conflict.fullName} (${conflict.department}/${conflict.team})\n`;
-        conflictMessage += `📅 ${conflict.startDate} - ${conflict.endDate}\n\n`;
-      });
-      conflictMessage += 'Будь ласка, оберіть інші дати.';
-      
-      await telegramService.sendMessage(chatId, conflictMessage);
-      return;
-    }
-    
-    // Зберігаємо заявку
-    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days);
-    
-    // Відповідь користувачу
-    const { formatDate } = require('./utils/validation');
-    await telegramService.sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
-    
-  } catch (error) {
-    const { ValidationError, DatabaseError, TelegramError } = require('./utils/errors');
-    
-    if (error instanceof ValidationError) {
-      logger.warn('Validation error in vacation request', { telegramId, error: error.message });
-      await telegramService.sendMessage(chatId, `❌ ${error.message}`);
-    } else if (error instanceof DatabaseError) {
-      logger.error('Database error in vacation request', error, { telegramId });
-      await telegramService.sendMessage(chatId, '❌ Помилка збереження даних. Спробуйте пізніше або зверніться до HR.');
-    } else if (error instanceof TelegramError) {
-      logger.error('Telegram error in vacation request', error, { telegramId });
-    } else {
-      logger.error('Unexpected error in vacation request', error, { telegramId });
-      try {
-        await telegramService.sendMessage(chatId, '❌ Сталася неочікувана помилка. Спробуйте пізніше або зверніться до HR.');
-      } catch (sendError) {
-        logger.error('Failed to send error message', sendError, { telegramId });
-      }
-    }
-  }
-}
-
-// Отримання інформації про користувача (оптимізовано з bulk операціями)
-async function getUserInfo(telegramId) {
-  try {
-    if (userCache.has(telegramId)) {
-      return userCache.get(telegramId);
-    }
-
-    // Використовуємо bulk сервіс для отримання інформації
-    const usersMap = await bulkService.getUsersInfo([telegramId]);
-    const user = usersMap.get(telegramId);
-    
-    if (user) {
-      userCache.set(telegramId, user);
-      return user;
-    }
-
-    // Fallback для тестових даних
-    const testUser = {
-      telegramId: telegramId,
-      fullName: 'Тестовий Користувач',
-      department: 'HR',
-      team: 'HR',
-      pm: 'Тестовий PM'
-    };
-
-    userCache.set(telegramId, testUser);
-    return testUser;
-  } catch (error) {
-    logger.error('Error getting user info', error, { telegramId });
-    return null;
-  }
-}
-
-// Перевірка перетинів відпусток (оптимізовано з bulk операціями)
-async function checkVacationConflicts(department, team, startDate, endDate, excludeUserId = null) {
-  try {
-    return await bulkService.getVacationConflicts(department, team, startDate, endDate, excludeUserId);
-  } catch (error) {
-    logger.error('Error checking vacation conflicts', error);
-    return [];
-  }
-}
-
-// Збереження заявки на відпустку
-async function saveVacationRequest(telegramId, user, startDate, endDate, days) {
-  try {
-    // Тут буде логіка збереження в Google Sheets
-    const requestId = `REQ_${Date.now()}_${telegramId}`;
-    logger.info('Vacation request saved', { requestId, telegramId });
-    return requestId;
-  } catch (error) {
-    const { DatabaseError } = require('./utils/errors');
-    throw new DatabaseError('Помилка збереження заявки на відпустку');
-  }
-}
-
-// Обробка реєстрації (заглушка)
-async function handleRegistrationStep(chatId, telegramId, text) {
-  // Тут буде логіка реєстрації
-  logger.info('Registration step', { telegramId, text });
-}
-
-// 🚀 ЗАПУСК СЕРВЕРА
+// Запуск сервера
 async function startServer() {
   try {
-    // Запуск сервера НЕБЛОКУЮЧО
-    const server = app.listen(PORT, '0.0.0.0', () => {
-      logger.success('HR Bot Ultimate запущено', { port: PORT });
-      logger.info('Health check available', { url: `http://localhost:${PORT}/` });
+    // Запуск сервера
+    const server = app.listen(config.PORT, '0.0.0.0', () => {
+      logger.success(`HR Bot Modular запущено на порту ${config.PORT}`);
+      logger.info(`Health check: http://localhost:${config.PORT}/`);
+      logger.info(`Webhook: ${config.WEBHOOK_URL || 'не встановлено'}`);
     });
     
-    // Обробка помилок сервера
     server.on('error', (error) => {
-      logger.error('Server error', error);
+      logger.error('Помилка сервера', error);
     });
     
     // Ініціалізація Google Sheets в фоні (неблокуюче)
     sheetsService.initialize().catch(error => {
-      logger.error('Google Sheets initialization failed', error);
-      logger.info('Retrying in 30 seconds...');
+      logger.error('Помилка ініціалізації Google Sheets', error);
+      logger.info('Спробуємо знову через 30 секунд...');
       setTimeout(() => sheetsService.initialize(), 30000);
     });
     
     // Встановлення webhook в фоні (неблокуюче)
-    if (WEBHOOK_URL) {
-      telegramService.setWebhook(`${WEBHOOK_URL}/webhook`)
-        .catch(error => logger.error('Webhook setup failed', error));
+    if (config.WEBHOOK_URL) {
+      const webhookUrl = `${config.WEBHOOK_URL}/webhook`;
+      logger.info('Встановлення webhook', { webhookUrl });
+      
+      telegramService.setWebhook(webhookUrl)
+        .then(() => {
+          logger.success('Webhook встановлено успішно', { webhookUrl });
+          return telegramService.getBotInfo();
+        })
+        .then(botInfo => {
+          logger.info('Bot info', { username: botInfo.username });
+        })
+        .catch(error => {
+          logger.error('Помилка встановлення webhook', error);
+        });
     } else {
-      logger.warn('WEBHOOK_URL не встановлено');
+      logger.warn('WEBHOOK_URL не встановлено в environment variables!');
+      logger.warn('Бот не зможе отримувати повідомлення без webhook!');
     }
     
+    // Моніторинг кешу (кожні 10 хвилин)
+    setInterval(() => {
+      logger.info('Кеш статистика', {
+        registrationCache: registrationCache.size(),
+        processedUpdates: processedUpdates.size()
+      });
+    }, 10 * 60 * 1000);
+    
   } catch (error) {
-    logger.error('Server startup error', error);
+    logger.error('Помилка запуску сервера', error);
   }
 }
 
-// ✅ ГЛОБАЛЬНА ОБРОБКА ПОМИЛОК
+// Глобальна обробка помилок
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Promise Rejection', reason, { 
     promise: promise.toString(),
@@ -543,21 +266,7 @@ process.on('uncaughtException', (error) => {
   }, 1000);
 });
 
-// Обробка помилок Express
-app.use((error, req, res, next) => {
-  logger.error('Express error', error, {
-    url: req.url,
-    method: req.method,
-    body: req.body
-  });
-  
-  res.status(500).json({
-    error: 'Internal Server Error',
-    timestamp: new Date().toISOString()
-  });
-});
-
 // Запуск
 startServer();
 
-logger.success('HR Bot Ultimate modular server started successfully');
+logger.success('HR Bot Modular server started successfully');

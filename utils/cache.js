@@ -1,6 +1,5 @@
 /**
- * 💾 ОПТИМІЗОВАНИЙ КЕШ З TTL
- * Централізований кеш для всього додатку
+ * Оптимізований кеш з TTL та лімітами розміру
  */
 
 class CacheWithTTL {
@@ -59,20 +58,4 @@ class CacheWithTTL {
   }
 }
 
-// 💾 КЕШІ
-const userCache = new CacheWithTTL(500, 10 * 60 * 1000); // 500 користувачів, 10 хвилин
-const registrationCache = new CacheWithTTL(100, 15 * 60 * 1000); // 100 реєстрацій, 15 хвилин
-const processedUpdates = new CacheWithTTL(1000, 2 * 60 * 1000); // 1000 запитів, 2 хвилини
-
-// 📊 МОНІТОРИНГ КЕШУ
-setInterval(() => {
-  console.log(`📊 Кеш статистика: userCache=${userCache.size()}, registrationCache=${registrationCache.size()}, processedUpdates=${processedUpdates.size()}`);
-}, 10 * 60 * 1000);
-
-module.exports = {
-  CacheWithTTL,
-  userCache,
-  registrationCache,
-  processedUpdates
-};
-
+module.exports = CacheWithTTL;

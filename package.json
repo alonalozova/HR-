@@ -9,6 +9,7 @@
     "start:full": "node HR_Bot_Complete_Ultimate.js",
     "start:hybrid": "node server_hybrid.js",
     "start:modular": "node app.js",
+    "start:fast": "node app.js",
     "start:legacy": "node HR_Bot_Complete_Ultimate.js",
     "start:minimal": "node server_minimal_debug.js",
     "dev": "node server.js"

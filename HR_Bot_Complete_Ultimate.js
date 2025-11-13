@@ -4622,7 +4622,36 @@ app.use((error, req, res, next) => {
   }
 });
 
-// Запуск
-startServer();
+// Експорт функцій для використання в модульній структурі
+module.exports = {
+  processMessage,
+  processCallback,
+  sendMessage,
+  getUserInfo,
+  getUserRole,
+  getPMForUser,
+  showMainMenu,
+  showWelcomeMessage,
+  handleReplyKeyboard,
+  handleVacationProcess,
+  handleLateProcess,
+  handleRemoteProcess,
+  handleSickProcess,
+  handleRegistrationStep,
+  handleHRMailing,
+  showHRDashboardStats,
+  formatDate,
+  isValidDate,
+  // Експортуємо змінні для доступу
+  bot,
+  doc,
+  userCache,
+  registrationCache,
+  processedUpdates
+};
 
-console.log('✅ HR Bot Ultimate server started successfully');
+// Запуск сервера тільки якщо файл запускається напряму
+if (require.main === module) {
+  startServer();
+  console.log('✅ HR Bot Ultimate server started successfully');
+}

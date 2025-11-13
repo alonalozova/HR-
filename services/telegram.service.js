@@ -4,7 +4,8 @@
  */
 
 const TelegramBot = require('node-telegram-bot-api');
-const { TelegramError, logger } = require('../utils/errors');
+const { TelegramError } = require('../utils/errors');
+const logger = require('../utils/logger');
 
 class TelegramService {
   constructor(botToken) {
