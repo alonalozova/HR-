@@ -1559,7 +1559,9 @@ async function showEmergencyVacationForm(chatId, telegramId) {
       data: { type: 'emergency_vacation' }
     });
 
-    await sendMessage(chatId, text);
+    // Додаємо кнопку "Назад"
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showEmergencyVacationForm');
+    await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showEmergencyVacationForm:', error);
   }
