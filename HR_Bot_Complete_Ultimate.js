@@ -3101,6 +3101,17 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       return;
     }
     
+    // Перевіряємо підключення до Google Sheets перед збереженням
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено, спробуємо перепідключитися...');
+      // Спробуємо перепідключитися
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        throw new DatabaseError('Google Sheets не підключено. Зверніться до HR для налаштування.', 'save_vacation');
+      }
+      console.log('✅ Google Sheets перепідключено успішно');
+    }
+    
     // Перевіряємо чи є PM для користувача
     const pm = await getPMForUser(user);
     const hasPM = pm !== null;
@@ -3149,7 +3160,9 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       await sendMessage(chatId, `❌ ${error.message}`);
     } else if (error instanceof DatabaseError) {
       logger.error('Database error in vacation request', error, { telegramId });
-      await sendMessage(chatId, '❌ Помилка збереження даних. Спробуйте пізніше або зверніться до HR.');
+      // Показуємо конкретне повідомлення про помилку, якщо воно є
+      const errorMessage = error.message || 'Помилка збереження даних';
+      await sendMessage(chatId, `❌ ${errorMessage}. Спробуйте пізніше або зверніться до HR.`);
     } else if (error instanceof TelegramError) {
       logger.error('Telegram error in vacation request', error, { telegramId });
       // Не відправляємо повідомлення, якщо бот заблокований
@@ -3227,7 +3240,9 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
 async function saveVacationRequest(telegramId, user, startDate, endDate, days, status = 'pending_pm', pm = null, requestType = 'regular', reason = '') {
   return executeWithRetryAndMonitor(
     async () => {
-      if (!doc) throw new Error('Google Sheets не підключено');
+      if (!doc) {
+        throw new DatabaseError('Google Sheets не підключено', 'save_vacation');
+      }
       
       await doc.loadInfo();
       let sheet = doc.sheetsByTitle['Vacations'];
