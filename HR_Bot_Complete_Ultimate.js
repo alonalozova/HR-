@@ -3043,11 +3043,41 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     }
     
     const { startDate, days } = vacationData;
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + days - 1);
+    
+    // Перевіряємо та конвертуємо startDate в об'єкт Date
+    let startDateObj;
+    if (startDate instanceof Date) {
+      startDateObj = new Date(startDate);
+    } else if (typeof startDate === 'string') {
+      startDateObj = new Date(startDate);
+    } else {
+      throw new ValidationError('Невірний формат дати початку відпустки.', 'startDate');
+    }
+    
+    // Перевіряємо валідність дати
+    if (isNaN(startDateObj.getTime())) {
+      throw new ValidationError('Невірна дата початку відпустки.', 'startDate');
+    }
+    
+    // Перевіряємо кількість днів
+    const daysNum = parseInt(days);
+    if (isNaN(daysNum) || daysNum < 1 || daysNum > 7) {
+      throw new ValidationError('Кількість днів має бути від 1 до 7.', 'days');
+    }
+    
+    // Обчислюємо дату закінчення
+    const endDate = new Date(startDateObj);
+    endDate.setDate(endDate.getDate() + daysNum - 1);
+    
+    // Перевіряємо валідність дати закінчення
+    if (isNaN(endDate.getTime())) {
+      throw new ValidationError('Невірна дата закінчення відпустки.', 'endDate');
+    }
+    
+    console.log(`📅 Обробка заявки: початок=${startDateObj.toISOString()}, кінець=${endDate.toISOString()}, днів=${daysNum}`);
     
     // Перевіряємо перетини з іншими відпустками
-    const conflicts = await checkVacationConflicts(user.department, user.team, startDate, endDate, telegramId);
+    const conflicts = await checkVacationConflicts(user.department, user.team, startDateObj, endDate, telegramId);
     
     if (conflicts.length > 0) {
       let conflictMessage = '⚠️ <b>Упс, твоя відпустка пересікається з Людинкою з твоєї команди:</b>\n\n';
@@ -3060,14 +3090,14 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       await sendMessage(chatId, conflictMessage);
       
       // Повідомляємо HR про конфлікт
-      await notifyHRAboutConflict(user, conflicts, startDate, endDate);
+      await notifyHRAboutConflict(user, conflicts, startDateObj, endDate);
       return;
     }
     
     // Перевіряємо баланс відпусток
     const balance = await getVacationBalance(telegramId);
-    if (balance.available < days) {
-      await sendMessage(chatId, `❌ Недостатньо днів відпустки. Доступно: ${balance.available} днів, потрібно: ${days} днів.`);
+    if (balance.available < daysNum) {
+      await sendMessage(chatId, `❌ Недостатньо днів відпустки. Доступно: ${balance.available} днів, потрібно: ${daysNum} днів.`);
       return;
     }
     
@@ -3079,37 +3109,41 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     const initialStatus = hasPM ? 'pending_pm' : 'pending_hr';
     
     // Зберігаємо заявку в таблицю
-    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days, initialStatus, pm);
+    const requestId = await saveVacationRequest(telegramId, user, startDateObj, endDate, daysNum, initialStatus, pm);
     
     // Оновлюємо баланс відпусток (тільки після затвердження)
     // await updateVacationBalance(telegramId, user, days);
     
     if (hasPM) {
       // Якщо є PM - відправляємо PM, потім HR
-      await notifyPMAboutVacationRequest(user, requestId, startDate, endDate, days, pm);
-      await notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days, conflicts, false);
+      await notifyPMAboutVacationRequest(user, requestId, startDateObj, endDate, daysNum, pm);
+      await notifyHRAboutVacationRequest(user, requestId, startDateObj, endDate, daysNum, conflicts, false);
       
       // Підтвердження користувачу
-      await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> ${pm.fullName}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
+      await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDateObj)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${daysNum}\n👤 <b>PM:</b> ${pm.fullName}\n\n⏳ Заявка відправлена на затвердження PM, після чого перейде до HR.`);
     } else {
       // Якщо немає PM - відправляємо одразу HR з можливістю підтвердження
-      await notifyHRAboutVacationRequest(user, requestId, startDate, endDate, days, conflicts, true);
+      await notifyHRAboutVacationRequest(user, requestId, startDateObj, endDate, daysNum, conflicts, true);
       
       // Підтвердження користувачу
-      await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n👤 <b>PM:</b> Не призначено\n\n⏳ Заявка відправлена одразу на затвердження HR.`);
+      await sendMessage(chatId, `✅ <b>Супер, твій запит відправляється далі!</b>\n\n📅 <b>Період:</b> ${formatDate(startDateObj)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${daysNum}\n👤 <b>PM:</b> Не призначено\n\n⏳ Заявка відправлена одразу на затвердження HR.`);
     }
     
     // Логування
     await logUserData(telegramId, 'vacation_request', {
       requestId,
-      startDate: startDate.toISOString(),
+      startDate: startDateObj.toISOString(),
       endDate: endDate.toISOString(),
-      days,
+      days: daysNum,
       department: user.department,
       team: user.team
     });
     
   } catch (error) {
+    console.error('❌ Помилка processVacationRequest:', error);
+    console.error('❌ Stack:', error.stack);
+    console.error('❌ Vacation data:', JSON.stringify(vacationData, null, 2));
+    
     if (error instanceof ValidationError) {
       logger.warn('Validation error in vacation request', { telegramId, error: error.message });
       await sendMessage(chatId, `❌ ${error.message}`);
@@ -3120,9 +3154,9 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       logger.error('Telegram error in vacation request', error, { telegramId });
       // Не відправляємо повідомлення, якщо бот заблокований
     } else {
-      logger.error('Unexpected error in vacation request', error, { telegramId });
+      logger.error('Unexpected error in vacation request', error, { telegramId, vacationData });
       try {
-        await sendMessage(chatId, '❌ Сталася неочікувана помилка. Спробуйте пізніше або зверніться до HR.');
+        await sendMessage(chatId, `❌ Сталася неочікувана помилка: ${error.message || 'невідома помилка'}. Спробуйте пізніше або зверніться до HR.`);
       } catch (sendError) {
         logger.error('Failed to send error message', sendError, { telegramId });
       }
