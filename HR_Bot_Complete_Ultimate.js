@@ -64,6 +64,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
+const navigationStack = require('./utils/navigation');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
 // ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
@@ -643,8 +644,63 @@ async function processCallback(callbackQuery) {
       'onboarding_rules': () => showCompanyRules(chatId, telegramId),
       'onboarding_structure': () => showTeamStructure(chatId, telegramId),
       // AI помічник видалено
+      'back': async () => {
+        // Отримуємо попередній стан
+        const previousState = navigationStack.popState(telegramId);
+        
+        if (previousState) {
+          // Відновлюємо попередній стан
+          const { state, context } = previousState;
+          
+          // Очищаємо кеш реєстрації/форм якщо повертаємося до меню
+          if (state.includes('Menu') || state.includes('Panel')) {
+            if (registrationCache.has(telegramId)) {
+              registrationCache.delete(telegramId);
+            }
+          }
+          
+          // Викликаємо функцію попереднього стану
+          const stateFunctions = {
+            'showMainMenu': () => showMainMenu(chatId, telegramId),
+            'showVacationMenu': () => showVacationMenu(chatId, telegramId),
+            'showRemoteMenu': () => showRemoteMenu(chatId, telegramId),
+            'showLateMenu': () => showLateMenu(chatId, telegramId),
+            'showSickMenu': () => showSickMenu(chatId, telegramId),
+            'showStatsMenu': () => showStatsMenu(chatId, telegramId),
+            'showOnboardingMenu': () => showOnboardingMenu(chatId, telegramId),
+            'showFAQMenu': () => showFAQMenu(chatId, telegramId),
+            'showSuggestionsMenu': () => showSuggestionsMenu(chatId, telegramId),
+            'showASAPMenu': () => showASAPMenu(chatId, telegramId),
+            'showApprovalsMenu': () => showApprovalsMenu(chatId, telegramId),
+            'showAnalyticsMenu': () => showAnalyticsMenu(chatId, telegramId),
+            'showHRPanel': () => showHRPanel(chatId, telegramId),
+            'showCEOPanel': () => showCEOPanel(chatId, telegramId),
+            'showMailingsMenu': () => showMailingsMenu(chatId, telegramId),
+            'showHRExportMenu': () => showHRExportMenu(chatId, telegramId),
+            'showCEOExportMenu': () => showCEOExportMenu(chatId, telegramId),
+            'showVacationForm': () => showVacationForm(chatId, telegramId),
+            'showEmergencyVacationForm': () => showEmergencyVacationForm(chatId, telegramId),
+            'showVacationBalance': () => showVacationBalance(chatId, telegramId),
+            'showMyVacationRequests': () => showMyVacationRequests(chatId, telegramId)
+          };
+          
+          if (stateFunctions[state]) {
+            await stateFunctions[state]();
+          } else {
+            // Fallback на головне меню
+            await showMainMenu(chatId, telegramId);
+          }
+        } else {
+          // Якщо немає попереднього стану, повертаємося до головного меню
+          if (registrationCache.has(telegramId)) {
+            registrationCache.delete(telegramId);
+          }
+          await showMainMenu(chatId, telegramId);
+        }
+      },
       'back_to_main': async () => {
-        // Очищаємо кеш реєстрації/форм перед поверненням до головного меню
+        // Очищаємо історію навігації та кеш реєстрації/форм
+        navigationStack.clearHistory(telegramId);
         if (registrationCache.has(telegramId)) {
           registrationCache.delete(telegramId);
         }
@@ -707,6 +763,32 @@ async function processCallback(callbackQuery) {
   } catch (error) {
     console.error('❌ Помилка processCallback:', error);
   }
+}
+
+// 🧭 HELPER: Додавання кнопки "Назад" до клавіатури
+function addBackButton(keyboard, telegramId, previousState = 'main_menu') {
+  if (!keyboard || !keyboard.inline_keyboard) {
+    keyboard = { inline_keyboard: [] };
+  }
+  
+  // Перевіряємо чи є попередній стан
+  const hasPrevious = navigationStack.hasPreviousState(telegramId);
+  
+  // Додаємо кнопку "Назад" тільки якщо є попередній стан або це не головне меню
+  if (hasPrevious || previousState !== 'main_menu') {
+    // Перевіряємо чи вже немає кнопки "Назад"
+    const hasBackButton = keyboard.inline_keyboard.some(row => 
+      row.some(button => button.callback_data === 'back' || button.callback_data === 'back_to_main')
+    );
+    
+    if (!hasBackButton) {
+      keyboard.inline_keyboard.push([
+        { text: '⬅️ Назад', callback_data: 'back' }
+      ]);
+    }
+  }
+  
+  return keyboard;
 }
 
 // 📤 ВІДПРАВКА ПОВІДОМЛЕНЬ
@@ -876,6 +958,9 @@ async function getPMForUser(user) {
 // 🏠 ГОЛОВНЕ МЕНЮ
 async function showMainMenu(chatId, telegramId) {
   try {
+    // Очищаємо історію навігації при поверненні до головного меню
+    navigationStack.clearHistory(telegramId);
+    
     const role = await getUserRole(telegramId);
     const user = await getUserInfo(telegramId);
     
@@ -1229,6 +1314,9 @@ async function completeRegistration(chatId, telegramId, data) {
 // 🏖️ МЕНЮ ВІДПУСТОК
 async function showVacationMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан перед показом меню
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const user = await getUserInfo(telegramId);
     const balance = await getVacationBalance(telegramId);
     
@@ -1254,13 +1342,12 @@ async function showVacationMenu(chatId, telegramId) {
         [
           { text: '📄 Мої заявки', callback_data: 'vacation_requests' },
           { text: '📊 Баланс деталі', callback_data: 'vacation_balance' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showVacationMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showVacationMenu:', error);
@@ -1313,6 +1400,9 @@ async function getVacationBalance(telegramId) {
 // 📊 ПОКАЗАТИ БАЛАНС ВІДПУСТОК
 async function showVacationBalance(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню відпусток)
+    navigationStack.pushState(telegramId, 'showVacationMenu', {});
+    
     const balance = await getVacationBalance(telegramId);
     const user = await getUserInfo(telegramId);
     
@@ -1325,12 +1415,9 @@ async function showVacationBalance(chatId, telegramId) {
 ${user?.firstWorkDay ? `📆 <b>Перший робочий день:</b> ${formatDate(new Date(user.firstWorkDay))}` : ''}
 ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку після:</b> ${formatDate(new Date(new Date(user.firstWorkDay).setMonth(new Date(user.firstWorkDay).getMonth() + 3)))}` : ''}`;
     
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: '⬅️ Назад до відпусток', callback_data: 'vacation_apply' }]
-      ]
-    };
-    
+    const keyboard = { inline_keyboard: [] };
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showVacationBalance');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showVacationBalance:', error);
@@ -1341,6 +1428,9 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
 // 📄 МОЇ ЗАЯВКИ НА ВІДПУСТКУ
 async function showMyVacationRequests(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню відпусток)
+    navigationStack.pushState(telegramId, 'showVacationMenu', {});
+    
     if (!doc) {
       await sendMessage(chatId, '❌ Google Sheets не підключено.');
       return;
@@ -1397,12 +1487,9 @@ async function showMyVacationRequests(chatId, telegramId) {
       text += `   📅 ${startDate} - ${endDate} (${days} днів)\n\n`;
     });
     
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: '⬅️ Назад до відпусток', callback_data: 'vacation_apply' }]
-      ]
-    };
-    
+    const keyboard = { inline_keyboard: [] };
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showMyVacationRequests');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showMyVacationRequests:', error);
@@ -1446,6 +1533,9 @@ async function showVacationForm(chatId, telegramId) {
 // 🚨 ФОРМА ЕКСТРЕНОЇ ВІДПУСТКИ
 async function showEmergencyVacationForm(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню відпусток)
+    navigationStack.pushState(telegramId, 'showVacationMenu', {});
+    
     const user = await getUserInfo(telegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
@@ -1478,6 +1568,9 @@ async function showEmergencyVacationForm(chatId, telegramId) {
 // 🏠 МЕНЮ REMOTE
 async function showRemoteMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const user = await getUserInfo(telegramId);
     const stats = await getRemoteStats(telegramId);
     
@@ -1500,13 +1593,12 @@ async function showRemoteMenu(chatId, telegramId) {
         ],
         [
           { text: '📊 Статистика', callback_data: 'remote_stats' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showRemoteMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showRemoteMenu:', error);
@@ -1516,6 +1608,9 @@ async function showRemoteMenu(chatId, telegramId) {
 // ⏰ МЕНЮ СПІЗНЕНЬ
 async function showLateMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const stats = await getLateStats(telegramId);
     
     const text = `⏰ <b>Спізнення</b>
@@ -1538,13 +1633,12 @@ async function showLateMenu(chatId, telegramId) {
         ],
         [
           { text: '📊 Статистика спізнень', callback_data: 'late_stats' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showLateMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showLateMenu:', error);
@@ -1554,6 +1648,9 @@ async function showLateMenu(chatId, telegramId) {
 // 🏥 МЕНЮ ЛІКАРНЯНИХ
 async function showSickMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const stats = await getSickStats(telegramId);
     
     const text = `🏥 <b>Лікарняний</b>
@@ -1576,13 +1673,12 @@ async function showSickMenu(chatId, telegramId) {
         ],
         [
           { text: '📊 Статистика лікарняних', callback_data: 'sick_stats' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showSickMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showSickMenu:', error);
@@ -1592,6 +1688,9 @@ async function showSickMenu(chatId, telegramId) {
 // 📊 МЕНЮ СТАТИСТИКИ
 async function showStatsMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const text = `📊 <b>Моя статистика</b>
 
 Тут ви можете переглянути ваші особисті звіти та дані.
@@ -1605,13 +1704,12 @@ async function showStatsMenu(chatId, telegramId) {
         ],
         [
           { text: '📤 Експорт даних', callback_data: 'stats_export' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showStatsMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showStatsMenu:', error);
@@ -1621,6 +1719,9 @@ async function showStatsMenu(chatId, telegramId) {
 // 🎯 МЕНЮ ОНБОРДИНГУ
 async function showOnboardingMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const text = `🎯 <b>Онбординг та навчання</b>
 
 Тут зібрана вся необхідна інформація для роботи в команді.
@@ -1640,13 +1741,12 @@ async function showOnboardingMenu(chatId, telegramId) {
         ],
         [
           { text: '👥 Структура команди', callback_data: 'onboarding_structure' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showOnboardingMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showOnboardingMenu:', error);
@@ -1656,6 +1756,9 @@ async function showOnboardingMenu(chatId, telegramId) {
 // ❓ МЕНЮ FAQ
 async function showFAQMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const text = `❓ <b>Часті питання</b>
 
 Оберіть категорію:`;
@@ -1672,13 +1775,12 @@ async function showFAQMenu(chatId, telegramId) {
         ],
         [
           { text: '💼 Загальні', callback_data: 'faq_general' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showFAQMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showFAQMenu:', error);
@@ -1690,6 +1792,9 @@ async function showFAQMenu(chatId, telegramId) {
 // 💬 МЕНЮ ПРОПОЗИЦІЙ
 async function showSuggestionsMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const text = `💬 <b>Пропозиції</b>
 
 Ваші ідеї важливі для нас! Можете поділитися пропозиціями щодо покращення робочих процесів.
@@ -1704,13 +1809,12 @@ async function showSuggestionsMenu(chatId, telegramId) {
         ],
         [
           { text: '📄 Мої пропозиції', callback_data: 'suggestions_view' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showSuggestionsMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showSuggestionsMenu:', error);
@@ -1720,6 +1824,9 @@ async function showSuggestionsMenu(chatId, telegramId) {
 // 🚨 МЕНЮ ASAP
 async function showASAPMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const text = `🚨 <b>ASAP запит</b>
 
 Термінові питання, які потребують негайної уваги HR.
@@ -1743,12 +1850,12 @@ async function showASAPMenu(chatId, telegramId) {
         [
           { text: '🔒 Безпека/Конфіденційність', callback_data: 'asap_category_security' },
           { text: '❓ Інше', callback_data: 'asap_category_other' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
+
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showASAPMenu');
 
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
