@@ -837,17 +837,37 @@ async function getUserInfo(telegramId) {
   try {
     // Перевіряємо кеш (CacheWithTTL сам перевіряє TTL)
     if (userCache.has(telegramId)) {
-      return userCache.get(telegramId);
+      const cached = userCache.get(telegramId);
+      console.log(`✅ Користувач ${telegramId} знайдено в кеші: ${cached?.fullName || 'без імені'}`);
+      return cached;
     }
     
-    if (!doc) return null;
+    if (!doc) {
+      console.warn(`⚠️ Google Sheets не підключено для користувача ${telegramId}`);
+      return null;
+    }
     
     await doc.loadInfo();
     const sheet = doc.sheetsByTitle['Employees'];
-    if (!sheet) return null;
+    if (!sheet) {
+      console.warn(`⚠️ Лист Employees не знайдено для користувача ${telegramId}`);
+      return null;
+    }
     
     const rows = await sheet.getRows();
-    const user = rows.find(row => row.get('TelegramID') == telegramId);
+    console.log(`🔍 Шукаємо користувача ${telegramId} в ${rows.length} рядках`);
+    
+    // Перевіряємо як число та як рядок для надійності
+    const user = rows.find(row => {
+      const rowTelegramID = row.get('TelegramID');
+      const matches = rowTelegramID == telegramId || 
+             parseInt(rowTelegramID) === parseInt(telegramId) ||
+             String(rowTelegramID) === String(telegramId);
+      if (matches) {
+        console.log(`✅ Знайдено збіг: rowTelegramID=${rowTelegramID}, telegramId=${telegramId}`);
+      }
+      return matches;
+    });
     
     if (user) {
       const userData = {
@@ -864,12 +884,15 @@ async function getUserInfo(telegramId) {
       
       // Зберігаємо дані в кеш (CacheWithTTL сам додає timestamp)
       userCache.set(telegramId, userData);
+      console.log(`✅ Користувач ${telegramId} (${userData.fullName}) завантажено з Google Sheets та додано в кеш`);
       return userData;
     }
     
+    console.warn(`⚠️ Користувач ${telegramId} не знайдено в Google Sheets`);
     return null;
   } catch (error) {
-    console.error('❌ Помилка getUserInfo:', error);
+    console.error(`❌ Помилка getUserInfo для користувача ${telegramId}:`, error);
+    console.error('❌ Stack:', error.stack);
     return null;
   }
 }
@@ -1281,6 +1304,21 @@ async function handleRegistrationStep(chatId, telegramId, text) {
 // ✅ ЗАВЕРШЕННЯ РЕЄСТРАЦІЇ
 async function completeRegistration(chatId, telegramId, data) {
   try {
+    const fullName = `${data.name} ${data.surname}`;
+    
+    // Створюємо об'єкт користувача для кешу
+    const userData = {
+      telegramId: parseInt(telegramId),
+      fullName: fullName,
+      department: data.department,
+      team: data.team,
+      position: data.position,
+      birthDate: data.birthDate,
+      firstWorkDay: data.firstWorkDay,
+      workMode: 'Hybrid',
+      pm: null
+    };
+    
     // Збереження в Google Sheets
     if (doc) {
       await doc.loadInfo();
@@ -1291,7 +1329,7 @@ async function completeRegistration(chatId, telegramId, data) {
       
       await sheet.addRow({
         TelegramID: telegramId,
-        FullName: `${data.name} ${data.surname}`,
+        FullName: fullName,
         Department: data.department,
         Team: data.team,
         Position: data.position,
@@ -1300,22 +1338,28 @@ async function completeRegistration(chatId, telegramId, data) {
         WorkMode: 'Hybrid',
         RegistrationDate: new Date().toISOString()
       });
+      
+      console.log(`✅ Користувач ${telegramId} (${fullName}) збережено в Google Sheets`);
     }
 
+    // Очищаємо кеш реєстрації
     registrationCache.delete(telegramId);
     
-    // Отримуємо ім'я користувача для персоналізованого привітання
-    const fullName = `${data.name} ${data.surname}`;
-    
-    // Очищаємо кеш користувача, щоб оновити інформацію
+    // Очищаємо старий кеш користувача (якщо є)
     if (userCache.has(telegramId)) {
       userCache.delete(telegramId);
     }
+    
+    // Додаємо користувача в кеш одразу після реєстрації
+    userCache.set(telegramId, userData);
+    console.log(`✅ Користувач ${telegramId} (${fullName}) додано в кеш`);
 
     // Показуємо головне меню з персоналізованим привітанням
     await showMainMenu(chatId, telegramId);
   } catch (error) {
     console.error('❌ Помилка completeRegistration:', error);
+    console.error('❌ Stack:', error.stack);
+    await sendMessage(chatId, '❌ Помилка при завершенні реєстрації. Зверніться до HR.');
   }
 }
 
@@ -1582,6 +1626,12 @@ async function showRemoteMenu(chatId, telegramId) {
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
     const user = await getUserInfo(telegramId);
+    if (!user) {
+      console.error(`❌ Користувач ${telegramId} не знайдений в showRemoteMenu`);
+      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію через /start');
+      return;
+    }
+    
     const stats = await getRemoteStats(telegramId);
     
     const text = `🏠 <b>Remote робота</b>
