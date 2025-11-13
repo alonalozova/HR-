@@ -1868,6 +1868,9 @@ async function showASAPMenu(chatId, telegramId) {
 // 🚨 ВИБІР КАТЕГОРІЇ ASAP ЗАПИТУ
 async function showASAPCategoryForm(chatId, telegramId, category) {
   try {
+    // Зберігаємо попередній стан (меню ASAP)
+    navigationStack.pushState(telegramId, 'showASAPMenu', {});
+    
     const categoryNames = {
       'conflict': 'Конфлікт/Проблема',
       'health': 'Здоров\'я/Медицина',
@@ -1891,14 +1894,7 @@ async function showASAPCategoryForm(chatId, telegramId, category) {
 
 <i>Напишіть повідомлення, і воно буде одразу відправлено HR для розгляду.</i>`;
 
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '⬅️ Назад', callback_data: 'asap_menu' }
-        ]
-      ]
-    };
-
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showASAPCategoryForm');
     await sendMessage(chatId, text, keyboard);
     
     // Встановлюємо крок для обробки тексту з категорією
@@ -1915,6 +1911,9 @@ async function showASAPCategoryForm(chatId, telegramId, category) {
 // 📋 МЕНЮ ЗАТВЕРДЖЕНЬ (PM/HR/CEO)
 async function showApprovalsMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const role = await getUserRole(telegramId);
     
     if (role !== 'PM' && role !== 'HR' && role !== 'CEO') {
@@ -1931,13 +1930,12 @@ async function showApprovalsMenu(chatId, telegramId) {
         [
           { text: '🏖️ Відпустки', callback_data: 'approvals_vacations' },
           { text: '🏠 Remote', callback_data: 'approvals_remote' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showApprovalsMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showApprovalsMenu:', error);
@@ -1947,6 +1945,9 @@ async function showApprovalsMenu(chatId, telegramId) {
 // 📈 МЕНЮ АНАЛІТИКИ
 async function showAnalyticsMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const role = await getUserRole(telegramId);
     
     if (role !== 'HR' && role !== 'CEO') {
@@ -1963,13 +1964,12 @@ async function showAnalyticsMenu(chatId, telegramId) {
         [
           { text: '👥 HR Аналітика', callback_data: 'analytics_hr' },
           { text: '🏢 CEO Аналітика', callback_data: 'analytics_ceo' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showAnalyticsMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showAnalyticsMenu:', error);
@@ -1979,6 +1979,9 @@ async function showAnalyticsMenu(chatId, telegramId) {
 // 👥 HR ПАНЕЛЬ
 async function showHRPanel(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const role = await getUserRole(telegramId);
     
     if (role !== 'HR') {
@@ -2002,13 +2005,12 @@ async function showHRPanel(chatId, telegramId) {
         ],
         [
           { text: '⚙️ Налаштування', callback_data: 'hr_settings' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showHRPanel');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showHRPanel:', error);
@@ -2018,6 +2020,9 @@ async function showHRPanel(chatId, telegramId) {
 // 🏢 CEO ПАНЕЛЬ
 async function showCEOPanel(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
     const role = await getUserRole(telegramId);
     
     if (role !== 'CEO') {
@@ -2038,13 +2043,12 @@ async function showCEOPanel(chatId, telegramId) {
         [
           { text: '💼 Бізнес метрики', callback_data: 'ceo_metrics' },
           { text: '📈 Експорт даних', callback_data: 'ceo_export' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showCEOPanel');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showCEOPanel:', error);
@@ -2149,6 +2153,9 @@ async function getSickStats(telegramId) {
 // Розсилка всім співробітникам
 async function startMailingToAll(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню розсилок)
+    navigationStack.pushState(telegramId, 'showMailingsMenu', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
@@ -2161,9 +2168,10 @@ async function startMailingToAll(chatId, telegramId) {
       data: { type: 'all', recipients: 'all' }
     });
 
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'startMailingToAll');
     await sendMessage(chatId, `📢 <b>Розсилка всім співробітникам</b>
 
-Введіть текст повідомлення:`);
+Введіть текст повідомлення:`, keyboard);
   } catch (error) {
     console.error('❌ Помилка startMailingToAll:', error);
   }
@@ -2172,6 +2180,9 @@ async function startMailingToAll(chatId, telegramId) {
 // Розсилка по відділу
 async function startMailingToDepartment(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню розсилок)
+    navigationStack.pushState(telegramId, 'showMailingsMenu', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
@@ -2191,13 +2202,12 @@ async function startMailingToDepartment(chatId, telegramId) {
         [
           { text: '👥 HR', callback_data: 'mailing_dept_HR' },
           { text: '👑 CEO', callback_data: 'mailing_dept_CEO' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'hr_mailings' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'startMailingToDepartment');
     await sendMessage(chatId, `📢 <b>Розсилка по відділу</b>
 
 Оберіть відділ:`, keyboard);
@@ -2209,6 +2219,9 @@ async function startMailingToDepartment(chatId, telegramId) {
 // Розсилка по команді
 async function startMailingToTeam(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню розсилок)
+    navigationStack.pushState(telegramId, 'showMailingsMenu', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
@@ -2228,13 +2241,12 @@ async function startMailingToTeam(chatId, telegramId) {
         [
           { text: 'SMM', callback_data: 'mailing_team_SMM' },
           { text: 'Sales', callback_data: 'mailing_team_Sales and communication' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'hr_mailings' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'startMailingToTeam');
     await sendMessage(chatId, `📢 <b>Розсилка по команді</b>
 
 Оберіть команду:`, keyboard);
@@ -2246,6 +2258,9 @@ async function startMailingToTeam(chatId, telegramId) {
 // Розсилка по ролі
 async function startMailingToRole(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню розсилок)
+    navigationStack.pushState(telegramId, 'showMailingsMenu', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
@@ -2261,13 +2276,12 @@ async function startMailingToRole(chatId, telegramId) {
         [
           { text: '👨‍💼 PM', callback_data: 'mailing_role_PM' },
           { text: '👤 Employee', callback_data: 'mailing_role_EMP' }
-        ],
-        [
-          { text: '⬅️ Назад', callback_data: 'hr_mailings' }
         ]
       ]
     };
 
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'startMailingToRole');
     await sendMessage(chatId, `📢 <b>Розсилка по ролі</b>
 
 Оберіть роль:`, keyboard);
@@ -2297,6 +2311,9 @@ async function handleHRMailing(chatId, telegramId, text) {
 // Обробка вибраного відділу для розсилки
 async function startMailingToDepartmentSelected(chatId, telegramId, department) {
   try {
+    // Зберігаємо попередній стан (вибір відділу)
+    navigationStack.pushState(telegramId, 'startMailingToDepartment', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
@@ -2308,9 +2325,10 @@ async function startMailingToDepartmentSelected(chatId, telegramId, department) 
       data: { type: 'department', department: department }
     });
 
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'startMailingToDepartmentSelected');
     await sendMessage(chatId, `📢 <b>Розсилка по відділу: ${department}</b>
 
-Введіть текст повідомлення:`);
+Введіть текст повідомлення:`, keyboard);
   } catch (error) {
     console.error('❌ Помилка startMailingToDepartmentSelected:', error);
   }
@@ -2319,6 +2337,9 @@ async function startMailingToDepartmentSelected(chatId, telegramId, department) 
 // Обробка вибраної команди для розсилки
 async function startMailingToTeamSelected(chatId, telegramId, team) {
   try {
+    // Зберігаємо попередній стан (вибір команди)
+    navigationStack.pushState(telegramId, 'startMailingToTeam', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
@@ -2330,9 +2351,10 @@ async function startMailingToTeamSelected(chatId, telegramId, team) {
       data: { type: 'team', team: team }
     });
 
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'startMailingToTeamSelected');
     await sendMessage(chatId, `📢 <b>Розсилка по команді: ${team}</b>
 
-Введіть текст повідомлення:`);
+Введіть текст повідомлення:`, keyboard);
   } catch (error) {
     console.error('❌ Помилка startMailingToTeamSelected:', error);
   }
@@ -2341,6 +2363,9 @@ async function startMailingToTeamSelected(chatId, telegramId, team) {
 // Обробка вибраної ролі для розсилки
 async function startMailingToRoleSelected(chatId, telegramId, role) {
   try {
+    // Зберігаємо попередній стан (вибір ролі)
+    navigationStack.pushState(telegramId, 'startMailingToRole', {});
+    
     const userRole = await getUserRole(telegramId);
     if (userRole !== 'HR') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
@@ -2352,9 +2377,10 @@ async function startMailingToRoleSelected(chatId, telegramId, role) {
       data: { type: 'role', role: role }
     });
 
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'startMailingToRoleSelected');
     await sendMessage(chatId, `📢 <b>Розсилка по ролі: ${role}</b>
 
-Введіть текст повідомлення:`);
+Введіть текст повідомлення:`, keyboard);
   } catch (error) {
     console.error('❌ Помилка startMailingToRoleSelected:', error);
   }
@@ -2494,6 +2520,9 @@ async function showNotionLink(chatId, telegramId) {
 // Показати тестування
 async function showOnboardingQuiz(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню онбордингу)
+    navigationStack.pushState(telegramId, 'showOnboardingMenu', {});
+    
     const text = `❓ <b>Тестування знань</b>
 
 Познайомився з матеріалами? Давай тепер пройдемо коротеньке опитування, і дізнаємося чи про все ти пам'ятаєш.
@@ -2504,14 +2533,7 @@ async function showOnboardingQuiz(chatId, telegramId) {
 
 Після завершення тесту, ти одразу побачиш кількість правильних відповідей та пояснення помилок.`;
 
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
-        ]
-      ]
-    };
-
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showOnboardingQuiz');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showOnboardingQuiz:', error);
@@ -2521,6 +2543,9 @@ async function showOnboardingQuiz(chatId, telegramId) {
 // Показати правила компанії
 async function showCompanyRules(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню онбордингу)
+    navigationStack.pushState(telegramId, 'showOnboardingMenu', {});
+    
     const text = `📖 <b>Правила компанії</b>
 
 <b>Робочий режим:</b>
@@ -2544,14 +2569,7 @@ async function showCompanyRules(chatId, telegramId) {
 • Відпустка за 5 робочих днів всім
 • Спізнення 7 разів/міс = попередження`;
 
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
-        ]
-      ]
-    };
-
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showCompanyRules');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showCompanyRules:', error);
@@ -2561,6 +2579,9 @@ async function showCompanyRules(chatId, telegramId) {
 // Показати структуру команди
 async function showTeamStructure(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню онбордингу)
+    navigationStack.pushState(telegramId, 'showOnboardingMenu', {});
+    
     const text = `👥 <b>Структура команди</b>
 
 <b>Marketing:</b>
@@ -2591,14 +2612,7 @@ async function showTeamStructure(chatId, telegramId) {
 
 Target керує CEO прямо.`;
 
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '⬅️ Назад', callback_data: 'back_to_main' }
-        ]
-      ]
-    };
-
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showTeamStructure');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showTeamStructure:', error);
@@ -3416,6 +3430,9 @@ async function updateVacationBalance(telegramId, user, usedDays) {
 // 📤 Меню експорту для HR
 async function showHRExportMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (HR панель)
+    navigationStack.pushState(telegramId, 'showHRPanel', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR' && role !== 'CEO') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR та CEO.');
@@ -3431,13 +3448,12 @@ async function showHRExportMenu(chatId, telegramId) {
         [
           { text: '👤 По працівнику', callback_data: 'hr_export_employee' },
           { text: '🏢 По відділу', callback_data: 'hr_export_department' }
-        ],
-        [
-          { text: '⬅️ Назад до HR панелі', callback_data: 'hr_panel' }
         ]
       ]
     };
     
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showHRExportMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showHRExportMenu:', error);
@@ -3447,6 +3463,9 @@ async function showHRExportMenu(chatId, telegramId) {
 // 📤 Меню експорту для CEO
 async function showCEOExportMenu(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (CEO панель)
+    navigationStack.pushState(telegramId, 'showCEOPanel', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'CEO') {
       await sendMessage(chatId, '❌ Доступ обмежено. Тільки для CEO.');
@@ -3462,12 +3481,12 @@ async function showCEOExportMenu(chatId, telegramId) {
         [
           { text: '👤 По працівнику', callback_data: 'ceo_export_employee' },
           { text: '🏢 По відділу', callback_data: 'ceo_export_department' }
-        ],
-        [
-          { text: '⬅️ Назад до CEO панелі', callback_data: 'ceo_panel' }
         ]
       ]
     };
+    
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showCEOExportMenu');
     
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
@@ -3478,6 +3497,9 @@ async function showCEOExportMenu(chatId, telegramId) {
 // 📤 Експорт даних по працівнику (HR)
 async function showHRExportEmployee(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню експорту)
+    navigationStack.pushState(telegramId, 'showHRExportMenu', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR' && role !== 'CEO') {
       await sendMessage(chatId, '❌ Доступ обмежено.');
@@ -3536,19 +3558,17 @@ async function showHRExportEmployee(chatId, telegramId) {
       text += `\n`;
     });
     
-    keyboard.inline_keyboard.push([
-      { text: '⬅️ Назад', callback_data: 'hr_export' }
-    ]);
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showHRExportEmployee');
     
     // Розбиваємо на кілька повідомлень, якщо кнопок багато
     if (keyboard.inline_keyboard.length > 10) {
       await sendMessage(chatId, text.substring(0, 4000));
       // Відправляємо кнопки окремо
       const buttonsKeyboard = {
-        inline_keyboard: keyboard.inline_keyboard.slice(0, 10).concat([
-          [{ text: '⬅️ Назад', callback_data: 'hr_export' }]
-        ])
+        inline_keyboard: keyboard.inline_keyboard.slice(0, 10)
       };
+      addBackButton(buttonsKeyboard, telegramId, 'showHRExportEmployee');
       await sendMessage(chatId, 'Оберіть працівника:', buttonsKeyboard);
     } else {
       await sendMessage(chatId, text, keyboard);
@@ -3568,6 +3588,9 @@ async function showCEOExportEmployee(chatId, telegramId) {
 // 📤 Експорт даних по відділу (HR)
 async function showHRExportDepartment(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню експорту)
+    navigationStack.pushState(telegramId, 'showHRExportMenu', {});
+    
     const role = await getUserRole(telegramId);
     if (role !== 'HR' && role !== 'CEO') {
       await sendMessage(chatId, '❌ Доступ обмежено.');
@@ -3611,10 +3634,8 @@ async function showHRExportDepartment(chatId, telegramId) {
       ]);
     });
     
-    keyboard.inline_keyboard.push([
-      { text: '⬅️ Назад', callback_data: 'hr_export' }
-    ]);
-    
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showHRExportDepartment');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showHRExportDepartment:', error);
@@ -3631,7 +3652,11 @@ async function showCEOExportDepartment(chatId, telegramId) {
 // 📊 Експорт даних конкретного працівника
 async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
   try {
+    // Зберігаємо попередній стан (список працівників)
     const role = await getUserRole(telegramId);
+    const previousState = role === 'CEO' ? 'showCEOExportEmployee' : 'showHRExportEmployee';
+    navigationStack.pushState(telegramId, previousState, {});
+    
     if (role !== 'HR' && role !== 'CEO') {
       await sendMessage(chatId, '❌ Доступ обмежено.');
       return;
@@ -3734,11 +3759,7 @@ async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
       await sendMessage(chatId, report);
     }
     
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: '⬅️ Назад', callback_data: role === 'CEO' ? 'ceo_export' : 'hr_export' }]
-      ]
-    };
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'exportEmployeeData');
     await sendMessage(chatId, 'Оберіть наступну дію:', keyboard);
     
   } catch (error) {
@@ -3750,7 +3771,11 @@ async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
 // 📊 Експорт даних по відділу
 async function exportDepartmentData(chatId, telegramId, department) {
   try {
+    // Зберігаємо попередній стан (список відділів)
     const role = await getUserRole(telegramId);
+    const previousState = role === 'CEO' ? 'showCEOExportDepartment' : 'showHRExportDepartment';
+    navigationStack.pushState(telegramId, previousState, {});
+    
     if (role !== 'HR' && role !== 'CEO') {
       await sendMessage(chatId, '❌ Доступ обмежено.');
       return;
@@ -3852,11 +3877,7 @@ async function exportDepartmentData(chatId, telegramId, department) {
       await sendMessage(chatId, report);
     }
     
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: '⬅️ Назад', callback_data: role === 'CEO' ? 'ceo_export' : 'hr_export' }]
-      ]
-    };
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'exportDepartmentData');
     await sendMessage(chatId, 'Оберіть наступну дію:', keyboard);
     
   } catch (error) {
@@ -3964,6 +3985,9 @@ async function handleLateProcess(chatId, telegramId, text) {
 
 async function reportLate(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню спізнень)
+    navigationStack.pushState(telegramId, 'showLateMenu', {});
+    
     const user = await getUserInfo(telegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений.');
@@ -3975,7 +3999,8 @@ async function reportLate(chatId, telegramId) {
       data: {}
     });
     
-    await sendMessage(chatId, '⏰ <b>Повідомлення про спізнення</b>\n\n📅 <b>Вкажіть дату спізнення</b> (ДД.ММ.РРРР):\n\nЯкщо спізнення сьогодні, введіть сьогоднішню дату.');
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'reportLate');
+    await sendMessage(chatId, '⏰ <b>Повідомлення про спізнення</b>\n\n📅 <b>Вкажіть дату спізнення</b> (ДД.ММ.РРРР):\n\nЯкщо спізнення сьогодні, введіть сьогоднішню дату.', keyboard);
   } catch (error) {
     console.error('❌ Помилка reportLate:', error);
   }
@@ -4030,9 +4055,14 @@ async function notifyHRAboutLate(user, date, time, reason, hasPM) {
 
 async function showLateStats(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню спізнень)
+    navigationStack.pushState(telegramId, 'showLateMenu', {});
+    
     const stats = await getLateStatsForCurrentMonth(telegramId);
     const text = `📊 <b>Статистика спізнень за поточний місяць</b>\n\n⏰ <b>Кількість спізнень:</b> ${stats.count}\n⚠️ <b>Ліміт:</b> 7 спізнень/місяць\n\n${stats.count >= 7 ? '⚠️ Досягнуто ліміт спізнень!' : `✅ Залишилось: ${7 - stats.count}`}`;
-    await sendMessage(chatId, text);
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showLateStats');
+    await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showLateStats:', error);
   }
@@ -4121,6 +4151,9 @@ async function handleRemoteProcess(chatId, telegramId, text) {
 
 async function setRemoteToday(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню remote)
+    navigationStack.pushState(telegramId, 'showRemoteMenu', {});
+    
     const user = await getUserInfo(telegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений.');
@@ -4132,7 +4165,8 @@ async function setRemoteToday(chatId, telegramId) {
       data: { type: 'today' }
     });
     
-    await sendMessage(chatId, '🏠 <b>Remote робота</b>\n\n📅 <b>Вкажіть дату Remote роботи</b> (ДД.ММ.РРРР):\n\n⚠️ Повідомлення має бути до 19:00 дня передуючого залишенню вдома.');
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'setRemoteToday');
+    await sendMessage(chatId, '🏠 <b>Remote робота</b>\n\n📅 <b>Вкажіть дату Remote роботи</b> (ДД.ММ.РРРР):\n\n⚠️ Повідомлення має бути до 19:00 дня передуючого залишенню вдома.', keyboard);
   } catch (error) {
     console.error('❌ Помилка setRemoteToday:', error);
   }
@@ -4187,7 +4221,11 @@ async function notifyHRAboutRemote(user, date, hasPM) {
 
 async function showRemoteCalendar(chatId, telegramId) {
   try {
-    await sendMessage(chatId, '📅 Календар Remote роботи в розробці.');
+    // Зберігаємо попередній стан (меню remote)
+    navigationStack.pushState(telegramId, 'showRemoteMenu', {});
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showRemoteCalendar');
+    await sendMessage(chatId, '📅 Календар Remote роботи в розробці.', keyboard);
   } catch (error) {
     console.error('❌ Помилка showRemoteCalendar:', error);
   }
@@ -4195,9 +4233,14 @@ async function showRemoteCalendar(chatId, telegramId) {
 
 async function showRemoteStats(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню remote)
+    navigationStack.pushState(telegramId, 'showRemoteMenu', {});
+    
     const stats = await getRemoteStatsForCurrentMonth(telegramId);
     const text = `📊 <b>Статистика Remote роботи за поточний місяць</b>\n\n🏠 <b>Використано днів:</b> ${stats.used}`;
-    await sendMessage(chatId, text);
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showRemoteStats');
+    await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showRemoteStats:', error);
   }
@@ -4264,6 +4307,9 @@ async function handleSickProcess(chatId, telegramId, text) {
 
 async function reportSick(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню лікарняних)
+    navigationStack.pushState(telegramId, 'showSickMenu', {});
+    
     const user = await getUserInfo(telegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений.');
@@ -4275,7 +4321,8 @@ async function reportSick(chatId, telegramId) {
       data: {}
     });
     
-    await sendMessage(chatId, '🏥 <b>Лікарняний</b>\n\n📅 <b>Вкажіть дату лікарняного</b> (ДД.ММ.РРРР):');
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'reportSick');
+    await sendMessage(chatId, '🏥 <b>Лікарняний</b>\n\n📅 <b>Вкажіть дату лікарняного</b> (ДД.ММ.РРРР):', keyboard);
   } catch (error) {
     console.error('❌ Помилка reportSick:', error);
   }
@@ -4330,9 +4377,14 @@ async function notifyHRAboutSick(user, date, hasPM) {
 
 async function showSickStats(chatId, telegramId) {
   try {
+    // Зберігаємо попередній стан (меню лікарняних)
+    navigationStack.pushState(telegramId, 'showSickMenu', {});
+    
     const stats = await getSickStatsForCurrentMonth(telegramId);
     const text = `📊 <b>Статистика лікарняних за поточний місяць</b>\n\n🏥 <b>Днів:</b> ${stats.days}\n📝 <b>Записів:</b> ${stats.count}`;
-    await sendMessage(chatId, text);
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showSickStats');
+    await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showSickStats:', error);
   }
