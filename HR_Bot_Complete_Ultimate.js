@@ -609,6 +609,9 @@ async function processCallback(callbackQuery) {
       'onboarding_new': () => showNewEmployeeMenu(chatId, telegramId),
       'onboarding_notion': () => showNotionLink(chatId, telegramId),
       'onboarding_quiz': () => showOnboardingQuiz(chatId, telegramId),
+      'oneonone_policy': () => showOneOnOnePolicy(chatId, telegramId),
+      'oneonone_employee': () => showOneOnOneEmployee(chatId, telegramId),
+      'oneonone_manager': () => showOneOnOneManager(chatId, telegramId),
       'suggestions_anonymous': () => showAnonymousSuggestionsForm(chatId, telegramId),
       'suggestions_named': () => showNamedSuggestionsForm(chatId, telegramId),
       'suggestions_view': () => showMySuggestions(chatId, telegramId),
@@ -669,6 +672,10 @@ async function processCallback(callbackQuery) {
             'showStatsMenu': () => showStatsMenu(chatId, telegramId),
             'showOnboardingMenu': () => showOnboardingMenu(chatId, telegramId),
             'showFAQMenu': () => showFAQMenu(chatId, telegramId),
+            'showOneOnOneMenu': () => showOneOnOneMenu(chatId, telegramId),
+            'showOneOnOnePolicy': () => showOneOnOnePolicy(chatId, telegramId),
+            'showOneOnOneEmployee': () => showOneOnOneEmployee(chatId, telegramId),
+            'showOneOnOneManager': () => showOneOnOneManager(chatId, telegramId),
             'showSuggestionsMenu': () => showSuggestionsMenu(chatId, telegramId),
             'showASAPMenu': () => showASAPMenu(chatId, telegramId),
             'showApprovalsMenu': () => showApprovalsMenu(chatId, telegramId),
@@ -828,11 +835,9 @@ async function sendMessage(chatId, text, keyboard = null) {
  */
 async function getUserInfo(telegramId) {
   try {
+    // Перевіряємо кеш (CacheWithTTL сам перевіряє TTL)
     if (userCache.has(telegramId)) {
-      const cached = userCache.get(telegramId);
-      if (Date.now() - cached.timestamp < 5 * 60 * 1000) {
-        return cached.data;
-      }
+      return userCache.get(telegramId);
     }
     
     if (!doc) return null;
@@ -857,7 +862,8 @@ async function getUserInfo(telegramId) {
         pm: user.get('PM') || null
       };
       
-      userCache.set(telegramId, { data: userData, timestamp: Date.now() });
+      // Зберігаємо дані в кеш (CacheWithTTL сам додає timestamp)
+      userCache.set(telegramId, userData);
       return userData;
     }
     
@@ -964,20 +970,12 @@ async function showMainMenu(chatId, telegramId) {
     const role = await getUserRole(telegramId);
     const user = await getUserInfo(telegramId);
     
-    let welcomeText = `🌟 <b>Ласкаво просимо до HR Бота!</b>
+    // Отримуємо ім'я користувача для персоналізованого привітання
+    const userName = user?.fullName || 'колега';
+    
+    let welcomeText = `👋 <b>Привіт, ${userName}!</b>
 
-🤖 <b>Що я вмію робити:</b>
-
-🏖️ <b>Відпустки:</b> подача заявок, перевірка балансу, календар
-🏠 <b>Remote:</b> фіксація віддаленої роботи, ліміти
-⏰ <b>Спізнення:</b> повідомлення про запізнення
-🏥 <b>Лікарняний:</b> фіксація хвороби, повідомлення HR
-📊 <b>Статистика:</b> особистий звіт за місяць
-🎯 <b>Онбординг:</b> матеріали для нових співробітників
-💬 <b>Пропозиції:</b> анонімні та іменні ідеї
-🚨 <b>ASAP:</b> термінові запити до HR
-
-👋 <b>Привіт, ${user?.fullName || 'колега'}!</b>`;
+Чим можу допомогти?`;
 
     // Reply Keyboard (постійна клавіатура внизу)
     const baseKeyboard = [
@@ -994,6 +992,10 @@ async function showMainMenu(chatId, telegramId) {
       [
         { text: '📊 Статистика' },
         { text: '🎯 Онбординг' }
+      ],
+      // Тет (1:1)
+      [
+        { text: '📋 Тет' }
       ],
       // Довідка та допомога
       [
@@ -1046,6 +1048,7 @@ async function handleReplyKeyboard(chatId, telegramId, text) {
       '🏥 Лікарняний': showSickMenu,
       '📊 Статистика': showStatsMenu,
       '🎯 Онбординг': showOnboardingMenu,
+      '📋 Тет': showOneOnOneMenu,
       '❓ FAQ': showFAQMenu,
       '💬 Пропозиції': showSuggestionsMenu,
       '🚨 ASAP запит': showASAPMenu,
@@ -1071,7 +1074,17 @@ async function handleReplyKeyboard(chatId, telegramId, text) {
 // 👋 ВСТУПНЕ ПОВІДОМЛЕННЯ
 async function showWelcomeMessage(chatId, telegramId, username, firstName, lastName) {
   try {
-    const welcomeText = `🌟 <b>Привіт зірочка!</b>
+    // Формуємо ім'я з firstName та lastName, якщо вони є
+    let userName = firstName || 'колега';
+    if (firstName && lastName) {
+      userName = `${firstName} ${lastName}`;
+    } else if (lastName) {
+      userName = lastName;
+    }
+    
+    const welcomeText = `👋 <b>Привіт, ${userName}!</b>
+
+Чим можу допомогти?
 
 Я бот-помічник розроблений твоїм HR. Вона створила мене, щоб полегшити і автоматизувати процеси. Я точно стану тобі в нагоді.
 
@@ -1085,6 +1098,7 @@ async function showWelcomeMessage(chatId, telegramId, username, firstName, lastN
 🏥 <b>Лікарняний:</b> фіксація хвороби, повідомлення HR
 📊 <b>Статистика:</b> особистий звіт за місяць
 🎯 <b>Онбординг:</b> матеріали для нових співробітників
+📋 <b>Тет:</b> матеріали про проведення тетів (1:1)
 💬 <b>Пропозиції:</b> анонімні та іменні ідеї
 🚨 <b>ASAP:</b> термінові запити до HR
 
@@ -1289,22 +1303,16 @@ async function completeRegistration(chatId, telegramId, data) {
     }
 
     registrationCache.delete(telegramId);
+    
+    // Отримуємо ім'я користувача для персоналізованого привітання
+    const fullName = `${data.name} ${data.surname}`;
+    
+    // Очищаємо кеш користувача, щоб оновити інформацію
+    if (userCache.has(telegramId)) {
+      userCache.delete(telegramId);
+    }
 
-    const welcomeText = `🎉 <b>Супер, тепер ми знайомі трошки більше!</b>
-
-Тепер ти можеш ознайомитися з моїм функціоналом. Я допоможу тобі з:
-
-🏖️ <b>Відпустками</b> - подача заявок, перевірка балансу
-🏠 <b>Remote роботою</b> - фіксація віддаленої роботи
-⏰ <b>Спізненнями</b> - повідомлення про запізнення
-🏥 <b>Лікарняними</b> - фіксація хвороби
-📊 <b>Статистикою</b> - особисті звіти
-🎯 <b>Онбордингом</b> - матеріали для нових
-💬 <b>Пропозиціями</b> - ідеї для покращення
-🚨 <b>ASAP запитами</b> - термінові питання
-
-Оберіть потрібну функцію з меню нижче!`;
-
+    // Показуємо головне меню з персоналізованим привітанням
     await showMainMenu(chatId, telegramId);
   } catch (error) {
     console.error('❌ Помилка completeRegistration:', error);
@@ -1786,6 +1794,150 @@ async function showFAQMenu(chatId, telegramId) {
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showFAQMenu:', error);
+  }
+}
+
+// 📋 МЕНЮ ТЕТ (1:1)
+async function showOneOnOneMenu(chatId, telegramId) {
+  try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showMainMenu', {});
+    
+    const text = `📋 <b>Тет (1:1)</b>
+
+Тут зібрана інформація про проведення тетів (1:1) в компанії.
+
+Оберіть категорію:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📄 Політика проведення', callback_data: 'oneonone_policy' }
+        ],
+        [
+          { text: '👤 Для працівника', callback_data: 'oneonone_employee' }
+        ],
+        [
+          { text: '👔 Для керівників', callback_data: 'oneonone_manager' }
+        ]
+      ]
+    };
+
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showOneOnOneMenu');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showOneOnOneMenu:', error);
+  }
+}
+
+// 📄 ПОКАЗАТИ ПОЛІТИКУ ПРОВЕДЕННЯ ТЕТІВ
+async function showOneOnOnePolicy(chatId, telegramId) {
+  try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showOneOnOneMenu', {});
+    
+    const text = `📄 <b>Політика проведення тетів (1:1)</b>
+
+Ось посилання на політику проведення тетів:
+
+🔗 https://docs.google.com/document/d/1TgND-pt6SlL3DJ67th7woy0WGcXzL8DuFOCUBu18APo/edit?usp=sharing`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔗 Відкрити документ', url: 'https://docs.google.com/document/d/1TgND-pt6SlL3DJ67th7woy0WGcXzL8DuFOCUBu18APo/edit?usp=sharing' }
+        ]
+      ]
+    };
+
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showOneOnOnePolicy');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showOneOnOnePolicy:', error);
+  }
+}
+
+// 👤 ПОКАЗАТИ МАТЕРІАЛИ ДЛЯ ПРАЦІВНИКА
+async function showOneOnOneEmployee(chatId, telegramId) {
+  try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showOneOnOneMenu', {});
+    
+    const text = `👤 <b>Матеріали для працівника</b>
+
+Ось посилання на матеріали для підготовки до тету (1:1):
+
+🔗 <b>Підготовка до тету (1:1)</b>
+https://docs.google.com/document/d/1rGdS1y9pgs0No3px9HNp88PEwMRzkOorVFCMVxtkzwU/edit?usp=sharing
+
+🔗 <b>Положення про проведення тетів (1:1)</b>
+https://docs.google.com/document/d/1W7F39MmgMo62GzmZ_9cYispsSfa3LQhnUJ7hpY_iP6Q/edit?usp=sharing`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📝 Підготовка до тету', url: 'https://docs.google.com/document/d/1rGdS1y9pgs0No3px9HNp88PEwMRzkOorVFCMVxtkzwU/edit?usp=sharing' }
+        ],
+        [
+          { text: '📄 Положення про тети', url: 'https://docs.google.com/document/d/1W7F39MmgMo62GzmZ_9cYispsSfa3LQhnUJ7hpY_iP6Q/edit?usp=sharing' }
+        ]
+      ]
+    };
+
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showOneOnOneEmployee');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showOneOnOneEmployee:', error);
+  }
+}
+
+// 👔 ПОКАЗАТИ МАТЕРІАЛИ ДЛЯ КЕРІВНИКІВ
+async function showOneOnOneManager(chatId, telegramId) {
+  try {
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showOneOnOneMenu', {});
+    
+    const text = `👔 <b>Матеріали для керівників</b>
+
+Ось посилання на матеріали для керівників:
+
+🔗 <b>Гайд для керівника</b>
+https://docs.google.com/document/d/1oM8YDuZ1-F9y0VEbWPuQNLyYOOX-V0xf6ggYYIJAcQ0/edit?usp=sharing
+
+🔗 <b>Для керівника. Фіксація зустрічі</b>
+https://docs.google.com/spreadsheets/d/1GF8aDJhNAHy0EOjr2l_IbuIzU_IqrEmqu0pTrm3IpgY/edit?usp=sharing
+
+🔗 <b>Документ 1</b>
+https://docs.google.com/document/d/1gh77x0eASHSRTJGlOGdBylXk-t5FnImxogOIf-4oKwc/edit?usp=sharing
+
+🔗 <b>Документ 2</b>
+https://docs.google.com/document/d/18pS9puEazuqsnhb01ik0zjWpAFtko_UJOd1p6C4_mjw/edit?usp=sharing`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📘 Гайд для керівника', url: 'https://docs.google.com/document/d/1oM8YDuZ1-F9y0VEbWPuQNLyYOOX-V0xf6ggYYIJAcQ0/edit?usp=sharing' }
+        ],
+        [
+          { text: '📊 Фіксація зустрічі', url: 'https://docs.google.com/spreadsheets/d/1GF8aDJhNAHy0EOjr2l_IbuIzU_IqrEmqu0pTrm3IpgY/edit?usp=sharing' }
+        ],
+        [
+          { text: '📄 Документ 1', url: 'https://docs.google.com/document/d/1gh77x0eASHSRTJGlOGdBylXk-t5FnImxogOIf-4oKwc/edit?usp=sharing' }
+        ],
+        [
+          { text: '📄 Документ 2', url: 'https://docs.google.com/document/d/18pS9puEazuqsnhb01ik0zjWpAFtko_UJOd1p6C4_mjw/edit?usp=sharing' }
+        ]
+      ]
+    };
+
+    // Додаємо кнопку "Назад"
+    addBackButton(keyboard, telegramId, 'showOneOnOneManager');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showOneOnOneManager:', error);
   }
 }
 
