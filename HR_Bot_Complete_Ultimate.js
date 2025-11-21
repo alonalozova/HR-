@@ -606,9 +606,7 @@ async function processCallback(callbackQuery) {
       'late_stats': () => showLateStats(chatId, telegramId),
       'sick_report': () => reportSick(chatId, telegramId),
       'sick_stats': () => showSickStats(chatId, telegramId),
-      'stats_vacations': () => showVacationStatsReport(chatId, telegramId),
-      'stats_remote': () => showRemoteStatsReport(chatId, telegramId),
-      'stats_lates': () => showLatesStatsReport(chatId, telegramId),
+      'stats_monthly': () => showMonthlyStats(chatId, telegramId),
       'stats_export': () => exportMyData(chatId, telegramId),
       'export_employee': async () => {
         const role = await getUserRole(telegramId);
@@ -1801,53 +1799,22 @@ async function showStatsMenu(chatId, telegramId) {
     // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
-    const user = await getUserInfo(telegramId);
-    if (!user) {
-      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
-      return;
-    }
-    
-    // Перевіряємо підключення до Google Sheets
-    if (!doc) {
-      console.warn('⚠️ Google Sheets не підключено в showStatsMenu, спробуємо перепідключитися...');
-      const reconnected = await initGoogleSheets();
-      if (!reconnected || !doc) {
-        await sendMessage(chatId, '⚠️ Google Sheets тимчасово недоступні. Статистика може бути обмежена. Спробуйте пізніше.');
-        // Все одно показуємо меню, але з попередженням
-      } else {
-        console.log('✅ Google Sheets перепідключено успішно в showStatsMenu');
-      }
-    }
-    
-    const role = await getUserRole(telegramId);
-    const isHRorCEO = role === 'HR' || role === 'CEO';
-    
     const text = `📊 <b>Моя статистика</b>
 
 Тут ви можете переглянути ваші особисті звіти та дані.
 
-Оберіть тип звіту:`;
+Оберіть дію:`;
 
     const keyboard = {
       inline_keyboard: [
         [
-          { text: '🏖️ Відпустки', callback_data: 'stats_vacations' }
+          { text: '📅 Звіт за місяць', callback_data: 'stats_monthly' }
         ],
         [
-          { text: '🏠 Remote робота', callback_data: 'stats_remote' }
-        ],
-        [
-          { text: '⏰ Спізнення', callback_data: 'stats_lates' }
+          { text: '📤 Експорт даних', callback_data: 'stats_export' }
         ]
       ]
     };
-    
-    // Для HR/CEO додаємо опцію експорту
-    if (isHRorCEO) {
-      keyboard.inline_keyboard.push([
-        { text: '📤 Експорт даних', callback_data: 'stats_export' }
-      ]);
-    }
 
     // Додаємо кнопку "Назад"
     addBackButton(keyboard, telegramId, 'showStatsMenu');
