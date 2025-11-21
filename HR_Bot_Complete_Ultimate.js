@@ -968,9 +968,10 @@ async function getUserInfo(telegramId) {
     }
     
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Employees'];
+    // Спробуємо спочатку українську назву, потім англійську для сумісності
+    const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
     if (!sheet) {
-      console.warn(`⚠️ Лист Employees не знайдено для користувача ${telegramId}`);
+      console.warn(`⚠️ Лист Працівники/Employees не знайдено для користувача ${telegramId}`);
       return null;
     }
     
@@ -2382,7 +2383,7 @@ async function showLatesStatsReport(chatId, telegramId, targetTelegramId = null,
     }
     
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Lates'];
+    const sheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
     if (!sheet) {
       await sendMessage(chatId, '❌ Таблиця спізнень не знайдена.');
       return;
@@ -4695,7 +4696,7 @@ async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
     ) : [];
     
     // Збираємо дані про спізнення
-    const lateSheet = doc.sheetsByTitle['Lates'];
+    const lateSheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
     const lateRecords = lateSheet ? (await lateSheet.getRows()).filter(row => 
       row.get('TelegramID') == targetTelegramId
     ) : [];
@@ -4707,7 +4708,7 @@ async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
     ) : [];
     
     // Збираємо дані про лікарняні
-    const sickSheet = doc.sheetsByTitle['Sick'];
+    const sickSheet = doc.sheetsByTitle['Лікарняні'] || doc.sheetsByTitle['Sick'];
     const sickRecords = sickSheet ? (await sickSheet.getRows()).filter(row => 
       row.get('TelegramID') == targetTelegramId
     ) : [];
