@@ -694,6 +694,10 @@ async function processCallback(callbackQuery) {
       'remote_stats': () => showRemoteStats(chatId, telegramId),
       'late_report': () => reportLate(chatId, telegramId),
       'late_stats': () => showLateStats(chatId, telegramId),
+      'late_today': () => handleLateToday(chatId, telegramId),
+      'late_other_date': () => handleLateOtherDate(chatId, telegramId),
+      'late_add_reason': () => handleLateAddReason(chatId, telegramId),
+      'late_skip_reason': () => handleLateSkipReason(chatId, telegramId),
       'sick_report': () => reportSick(chatId, telegramId),
       'sick_stats': () => showSickStats(chatId, telegramId),
       'stats_monthly': () => showMonthlyStats(chatId, telegramId),
@@ -5207,6 +5211,83 @@ async function processLateReport(chatId, telegramId, lateData) {
   } catch (error) {
     console.error('❌ Помилка processLateReport:', error);
     await sendMessage(chatId, '❌ Помилка обробки спізнення.');
+  }
+}
+
+// 📅 ОБРОБКА СПІЗНЕННЯ СЬОГОДНІ
+async function handleLateToday(chatId, telegramId) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) {
+      await sendMessage(chatId, '❌ Помилка. Спробуйте спочатку.');
+      return;
+    }
+    
+    const today = new Date();
+    regData.data.date = today;
+    regData.step = 'late_time';
+    registrationCache.set(telegramId, regData);
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'late_today');
+    await sendMessage(chatId, '⏰ <b>О котрій годині ви почнете працювати?</b>\n\nВведіть час у форматі ГГ:ХХ (наприклад: 12:30):', keyboard);
+  } catch (error) {
+    console.error('❌ Помилка handleLateToday:', error);
+  }
+}
+
+// 📅 ОБРОБКА ІНШОЇ ДАТИ СПІЗНЕННЯ
+async function handleLateOtherDate(chatId, telegramId) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) {
+      await sendMessage(chatId, '❌ Помилка. Спробуйте спочатку.');
+      return;
+    }
+    
+    regData.step = 'late_date';
+    registrationCache.set(telegramId, regData);
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'late_other_date');
+    await sendMessage(chatId, '📅 <b>Вкажіть дату спізнення</b> (ДД.ММ.РРРР):', keyboard);
+  } catch (error) {
+    console.error('❌ Помилка handleLateOtherDate:', error);
+  }
+}
+
+// 📝 ОБРОБКА ДОДАВАННЯ ПРИЧИНИ
+async function handleLateAddReason(chatId, telegramId) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) {
+      await sendMessage(chatId, '❌ Помилка. Спробуйте спочатку.');
+      return;
+    }
+    
+    regData.step = 'late_reason_input';
+    registrationCache.set(telegramId, regData);
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'late_add_reason');
+    await sendMessage(chatId, '📝 <b>Вкажіть причину спізнення:</b>', keyboard);
+  } catch (error) {
+    console.error('❌ Помилка handleLateAddReason:', error);
+  }
+}
+
+// ⏭️ ОБРОБКА ПРОПУСКУ ПРИЧИНИ
+async function handleLateSkipReason(chatId, telegramId) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) {
+      await sendMessage(chatId, '❌ Помилка. Спробуйте спочатку.');
+      return;
+    }
+    
+    regData.data.reason = 'Не вказано';
+    registrationCache.set(telegramId, regData);
+    await processLateReport(chatId, telegramId, regData.data);
+    registrationCache.delete(telegramId);
+  } catch (error) {
+    console.error('❌ Помилка handleLateSkipReason:', error);
   }
 }
 
