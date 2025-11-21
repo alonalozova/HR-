@@ -1026,19 +1026,115 @@ async function getUserInfo(telegramId) {
  */
 async function getUserRole(telegramId) {
   try {
-    if (!doc) return 'EMP';
+    if (!doc) {
+      // Якщо Google Sheets не підключено, спробуємо визначити роль за посадою з кешу
+      const user = userCache.get(telegramId);
+      if (user && user.position) {
+        return determineRoleByPosition(user.position);
+      }
+      return 'EMP';
+    }
     
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Roles'];
-    if (!sheet) return 'EMP';
+    let sheet = doc.sheetsByTitle['Roles'];
+    
+    // Якщо таблиця Roles не існує, створюємо її
+    if (!sheet) {
+      sheet = await doc.addSheet({
+        title: 'Roles',
+        headerValues: ['TelegramID', 'Role', 'Position', 'Department', 'UpdatedAt']
+      });
+      console.log('✅ Створено таблицю Roles');
+    }
     
     const rows = await sheet.getRows();
-    const role = rows.find(row => row.get('TelegramID') == telegramId);
+    const roleRow = rows.find(row => row.get('TelegramID') == telegramId);
     
-    return role ? role.get('Role') : 'EMP';
+    if (roleRow) {
+      return roleRow.get('Role') || 'EMP';
+    }
+    
+    // Якщо ролі немає в таблиці, спробуємо визначити за посадою
+    const user = await getUserInfo(telegramId);
+    if (user && user.position) {
+      const determinedRole = determineRoleByPosition(user.position);
+      // Зберігаємо визначену роль в таблицю
+      await saveUserRole(telegramId, determinedRole, user.position, user.department);
+      return determinedRole;
+    }
+    
+    return 'EMP';
   } catch (error) {
     console.error('❌ Помилка getUserRole:', error);
     return 'EMP';
+  }
+}
+
+// 🔍 ВИЗНАЧЕННЯ РОЛІ ЗА ПОСАДОЮ
+function determineRoleByPosition(position) {
+  if (!position) return 'EMP';
+  
+  const posLower = position.toLowerCase();
+  
+  // CEO
+  if (posLower.includes('ceo') || posLower.includes('founder') || posLower.includes('засновник')) {
+    return 'CEO';
+  }
+  
+  // HR
+  if (posLower.includes('hr') || posLower.includes('human resources')) {
+    return 'HR';
+  }
+  
+  // Team Lead
+  if (posLower.includes('team lead') || posLower.includes('teamlead') || 
+      posLower.includes('lead') || posLower.includes('керівник')) {
+    return 'TL';
+  }
+  
+  // За замовчуванням - працівник
+  return 'EMP';
+}
+
+// 💾 ЗБЕРЕЖЕННЯ РОЛІ КОРИСТУВАЧА
+async function saveUserRole(telegramId, role, position, department) {
+  try {
+    if (!doc) return;
+    
+    await doc.loadInfo();
+    let sheet = doc.sheetsByTitle['Roles'];
+    
+    if (!sheet) {
+      sheet = await doc.addSheet({
+        title: 'Roles',
+        headerValues: ['TelegramID', 'Role', 'Position', 'Department', 'UpdatedAt']
+      });
+    }
+    
+    const rows = await sheet.getRows();
+    const existingRow = rows.find(row => row.get('TelegramID') == telegramId);
+    
+    if (existingRow) {
+      // Оновлюємо існуючу роль
+      existingRow.set('Role', role);
+      existingRow.set('Position', position || '');
+      existingRow.set('Department', department || '');
+      existingRow.set('UpdatedAt', new Date().toISOString());
+      await existingRow.save();
+      console.log(`✅ Оновлено роль для ${telegramId}: ${role}`);
+    } else {
+      // Додаємо нову роль
+      await sheet.addRow({
+        TelegramID: telegramId,
+        Role: role,
+        Position: position || '',
+        Department: department || '',
+        UpdatedAt: new Date().toISOString()
+      });
+      console.log(`✅ Додано роль для ${telegramId}: ${role}`);
+    }
+  } catch (error) {
+    console.error('❌ Помилка saveUserRole:', error);
   }
 }
 
@@ -1494,6 +1590,11 @@ async function completeRegistration(chatId, telegramId, data) {
         });
         console.log(`✅ Додано користувача ${telegramId} (${fullName}) в Google Sheets`);
       }
+      
+      // 3. Визначаємо та зберігаємо роль на основі посади
+      const determinedRole = determineRoleByPosition(data.position);
+      await saveUserRole(telegramId, determinedRole, data.position, data.department);
+      console.log(`✅ Визначено роль для ${telegramId}: ${determinedRole} (на основі посади: ${data.position})`);
       
       // 2. Зберігаємо в "Дати початку роботи"
       let workStartSheet = doc.sheetsByTitle['Дати початку роботи'];
