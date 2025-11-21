@@ -335,6 +335,92 @@ const DEPARTMENTS = {
   }
 };
 
+// 📊 ІНІЦІАЛІЗАЦІЯ ВСІХ ВКЛАДОК З УКРАЇНСЬКИМИ НАЗВАМИ
+async function initSheets() {
+  try {
+    if (!doc) return;
+    
+    await doc.loadInfo();
+    
+    // 1. Працівники - загальна інформація
+    if (!doc.sheetsByTitle['Працівники']) {
+      await doc.addSheet({
+        title: 'Працівники',
+        headerValues: [
+          'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
+          'Дата народження', 'Перший робочий день', 'Режим роботи', 'Дата реєстрації'
+        ]
+      });
+      console.log('✅ Створено вкладку: Працівники');
+    }
+    
+    // 2. Дати початку роботи
+    if (!doc.sheetsByTitle['Дати початку роботи']) {
+      await doc.addSheet({
+        title: 'Дати початку роботи',
+        headerValues: [
+          'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
+          'Перший робочий день', 'Дата додавання'
+        ]
+      });
+      console.log('✅ Створено вкладку: Дати початку роботи');
+    }
+    
+    // 3. Відпустки
+    if (!doc.sheetsByTitle['Відпустки']) {
+      await doc.addSheet({
+        title: 'Відпустки',
+        headerValues: [
+          'ID заявки', 'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'PM',
+          'Дата початку', 'Дата закінчення', 'Кількість днів', 'Статус', 
+          'Тип заявки', 'Причина', 'Дата створення', 'Затверджено ким', 'Дата затвердження',
+          'Баланс до', 'Баланс після'
+        ]
+      });
+      console.log('✅ Створено вкладку: Відпустки');
+    }
+    
+    // 4. Лікарняні
+    if (!doc.sheetsByTitle['Лікарняні']) {
+      await doc.addSheet({
+        title: 'Лікарняні',
+        headerValues: [
+          'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 
+          'Дата початку', 'Дата закінчення', 'Термін (днів)', 'Причина', 'Дата створення'
+        ]
+      });
+      console.log('✅ Створено вкладку: Лікарняні');
+    }
+    
+    // 5. Спізнення
+    if (!doc.sheetsByTitle['Спізнення']) {
+      await doc.addSheet({
+        title: 'Спізнення',
+        headerValues: [
+          'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 
+          'Дата', 'Час', 'Причина', 'Дата створення'
+        ]
+      });
+      console.log('✅ Створено вкладку: Спізнення');
+    }
+    
+    // 6. Remote (залишаємо англійську назву для сумісності, але можна змінити)
+    if (!doc.sheetsByTitle['Remotes']) {
+      await doc.addSheet({
+        title: 'Remotes',
+        headerValues: [
+          'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'CreatedAt'
+        ]
+      });
+      console.log('✅ Створено вкладку: Remotes');
+    }
+    
+    console.log('✅ Всі вкладки ініціалізовано');
+  } catch (error) {
+    console.error('❌ Помилка ініціалізації вкладок:', error);
+  }
+}
+
 // 📊 ІНІЦІАЛІЗАЦІЯ GOOGLE SHEETS
 async function initGoogleSheets() {
   try {
@@ -352,6 +438,10 @@ async function initGoogleSheets() {
     doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
     await doc.loadInfo();
     console.log('✅ Google Sheets підключено:', doc.title);
+    
+    // Ініціалізуємо всі необхідні вкладки з українськими назвами
+    await initSheets();
+    
     return true;
   } catch (error) {
     console.warn('⚠️ Google Sheets недоступні:', error.message);
@@ -1359,24 +1449,81 @@ async function completeRegistration(chatId, telegramId, data) {
     // Збереження в Google Sheets
     if (doc) {
       await doc.loadInfo();
-      let sheet = doc.sheetsByTitle['Employees'];
-      if (!sheet) {
-        sheet = await doc.addSheet({ title: 'Employees', headerValues: ['TelegramID', 'FullName', 'Department', 'Team', 'Position', 'BirthDate', 'FirstWorkDay', 'WorkMode', 'RegistrationDate'] });
+      
+      // 1. Зберігаємо в "Працівники"
+      let employeesSheet = doc.sheetsByTitle['Працівники'];
+      if (!employeesSheet) {
+        employeesSheet = await doc.addSheet({
+          title: 'Працівники',
+          headerValues: [
+            'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
+            'Дата народження', 'Перший робочий день', 'Режим роботи', 'Дата реєстрації'
+          ]
+        });
       }
       
-      await sheet.addRow({
-        TelegramID: telegramId,
-        FullName: fullName,
-        Department: data.department,
-        Team: data.team,
-        Position: data.position,
-        BirthDate: data.birthDate,
-        FirstWorkDay: data.firstWorkDay,
-        WorkMode: 'Hybrid',
-        RegistrationDate: new Date().toISOString()
-      });
+      // Перевіряємо, чи користувач вже існує
+      const existingRows = await employeesSheet.getRows();
+      const existingUser = existingRows.find(row => row.get('TelegramID') == telegramId);
       
-      console.log(`✅ Користувач ${telegramId} (${fullName}) збережено в Google Sheets`);
+      if (existingUser) {
+        // Оновлюємо існуючого користувача
+        existingUser.set('Ім\'я та прізвище', fullName);
+        existingUser.set('Відділ', data.department);
+        existingUser.set('Команда', data.team);
+        existingUser.set('Посада', data.position);
+        existingUser.set('Дата народження', data.birthDate);
+        existingUser.set('Перший робочий день', data.firstWorkDay);
+        existingUser.set('Режим роботи', 'Hybrid');
+        existingUser.set('Дата реєстрації', new Date().toISOString());
+        await existingUser.save();
+        console.log(`✅ Оновлено користувача ${telegramId} (${fullName}) в Google Sheets`);
+      } else {
+        // Додаємо нового користувача
+        await employeesSheet.addRow({
+          'TelegramID': telegramId,
+          'Ім\'я та прізвище': fullName,
+          'Відділ': data.department,
+          'Команда': data.team,
+          'Посада': data.position,
+          'Дата народження': data.birthDate,
+          'Перший робочий день': data.firstWorkDay,
+          'Режим роботи': 'Hybrid',
+          'Дата реєстрації': new Date().toISOString()
+        });
+        console.log(`✅ Додано користувача ${telegramId} (${fullName}) в Google Sheets`);
+      }
+      
+      // 2. Зберігаємо в "Дати початку роботи"
+      let workStartSheet = doc.sheetsByTitle['Дати початку роботи'];
+      if (!workStartSheet) {
+        workStartSheet = await doc.addSheet({
+          title: 'Дати початку роботи',
+          headerValues: [
+            'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
+            'Перший робочий день', 'Дата додавання'
+          ]
+        });
+      }
+      
+      // Перевіряємо, чи запис вже існує
+      const workStartRows = await workStartSheet.getRows();
+      const existingWorkStart = workStartRows.find(row => 
+        row.get('TelegramID') == telegramId && row.get('Перший робочий день') == data.firstWorkDay
+      );
+      
+      if (!existingWorkStart) {
+        await workStartSheet.addRow({
+          'TelegramID': telegramId,
+          'Ім\'я та прізвище': fullName,
+          'Відділ': data.department,
+          'Команда': data.team,
+          'Посада': data.position,
+          'Перший робочий день': data.firstWorkDay,
+          'Дата додавання': new Date().toISOString()
+        });
+        console.log(`✅ Додано дату початку роботи для ${telegramId} (${fullName})`);
+      }
     }
 
     // Очищаємо кеш реєстрації
@@ -1452,8 +1599,9 @@ async function getVacationBalance(telegramId) {
     if (!user) return { used: 0, total: 24, available: 24 };
     
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Vacations'];
-    if (!sheet) return { used: 0, total: 24, available: 24 };
+    // Спробуємо спочатку українську назву, потім англійську для сумісності
+    let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+    if (!sheet) return { used: 0, total: 24, available: 24, annual: 24, remaining: 24 };
     
     const rows = await sheet.getRows();
     const workYearDates = getWorkYearDates(user.firstWorkDay);
@@ -1461,11 +1609,12 @@ async function getVacationBalance(telegramId) {
     // Фільтруємо відпустки за робочий рік (або календарний рік, якщо немає дати першого робочого дня)
     const userVacations = rows.filter(row => {
       const rowTelegramId = row.get('TelegramID');
-      const rowStatus = row.get('Status');
-      const rowStartDate = row.get('StartDate');
+      const rowStatus = row.get('Статус') || row.get('Status');
+      const rowStartDate = row.get('Дата початку') || row.get('StartDate');
       
       if (rowTelegramId != telegramId) return false;
-      if (rowStatus !== 'approved' && rowStatus !== 'Approved') return false;
+      // Враховуємо тільки затверджені відпустки
+      if (rowStatus !== 'approved' && rowStatus !== 'Approved' && rowStatus !== 'затверджено') return false;
       if (!rowStartDate) return false;
       
       const startDate = new Date(rowStartDate);
@@ -1480,9 +1629,9 @@ async function getVacationBalance(telegramId) {
     });
     
     const usedDays = userVacations.reduce((total, row) => {
-      const start = new Date(row.get('StartDate'));
-      const end = new Date(row.get('EndDate'));
-      const days = parseInt(row.get('Days')) || 0;
+      const start = new Date(row.get('Дата початку') || row.get('StartDate'));
+      const end = new Date(row.get('Дата закінчення') || row.get('EndDate'));
+      const days = parseInt(row.get('Кількість днів') || row.get('Days') || 0);
       return total + (days || Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1);
     }, 0);
     
@@ -3814,13 +3963,15 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
       }
       
       await doc.loadInfo();
-      let sheet = doc.sheetsByTitle['Vacations'];
+      let sheet = doc.sheetsByTitle['Відпустки'];
       if (!sheet) {
         sheet = await doc.addSheet({
-          title: 'Vacations',
+          title: 'Відпустки',
           headerValues: [
-            'RequestID', 'TelegramID', 'FullName', 'Department', 'Team', 'PM',
-            'StartDate', 'EndDate', 'Days', 'Status', 'RequestType', 'Reason', 'CreatedAt', 'ApprovedBy', 'ApprovedAt'
+            'ID заявки', 'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'PM',
+            'Дата початку', 'Дата закінчення', 'Кількість днів', 'Статус', 
+            'Тип заявки', 'Причина', 'Дата створення', 'Затверджено ким', 'Дата затвердження',
+            'Баланс до', 'Баланс після'
           ]
         });
       }
@@ -3828,22 +3979,31 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
       const requestId = `VAC_${Date.now()}_${telegramId}`;
       const pmName = pm ? pm.fullName : (user.pm || 'Не призначено');
       
+      // Отримуємо баланс до додавання відпустки
+      const balanceBefore = await getVacationBalance(telegramId);
+      const balanceAfter = {
+        remaining: Math.max(0, balanceBefore.remaining - days),
+        used: balanceBefore.used + days
+      };
+      
       await sheet.addRow({
-        RequestID: requestId,
-        TelegramID: telegramId,
-        FullName: user.fullName,
-        Department: user.department,
-        Team: user.team,
-        PM: pmName,
-        StartDate: startDate.toISOString().split('T')[0],
-        EndDate: endDate.toISOString().split('T')[0],
-        Days: days,
-        Status: status,
-        RequestType: requestType,
-        Reason: reason || '',
-        CreatedAt: new Date().toISOString(),
-        ApprovedBy: '',
-        ApprovedAt: ''
+        'ID заявки': requestId,
+        'TelegramID': telegramId,
+        'Ім\'я та прізвище': user.fullName,
+        'Відділ': user.department,
+        'Команда': user.team,
+        'PM': pmName,
+        'Дата початку': startDate.toISOString().split('T')[0],
+        'Дата закінчення': endDate.toISOString().split('T')[0],
+        'Кількість днів': days,
+        'Статус': status,
+        'Тип заявки': requestType,
+        'Причина': reason || '',
+        'Дата створення': new Date().toISOString(),
+        'Затверджено ким': '',
+        'Дата затвердження': '',
+        'Баланс до': balanceBefore.remaining,
+        'Баланс після': balanceAfter.remaining
       });
       
       console.log(`✅ Збережено заявку на відпустку: ${requestId}, статус: ${status}, тип: ${requestType}`);
@@ -4164,25 +4324,26 @@ async function saveLateRecord(telegramId, user, date, reason = '', time = '') {
       if (!doc) throw new Error('Google Sheets не підключено');
       
       await doc.loadInfo();
-      let sheet = doc.sheetsByTitle['Lates'];
+      let sheet = doc.sheetsByTitle['Спізнення'];
       if (!sheet) {
         sheet = await doc.addSheet({
-          title: 'Lates',
+          title: 'Спізнення',
           headerValues: [
-            'TelegramID', 'FullName', 'Department', 'Team', 'Date', 'Time', 'Reason', 'CreatedAt'
+            'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 
+            'Дата', 'Час', 'Причина', 'Дата створення'
           ]
         });
       }
       
       await sheet.addRow({
-        TelegramID: telegramId,
-        FullName: user.fullName,
-        Department: user.department,
-        Team: user.team,
-        Date: date.toISOString().split('T')[0],
-        Time: time,
-        Reason: reason,
-        CreatedAt: new Date().toISOString()
+        'TelegramID': telegramId,
+        'Ім\'я та прізвище': user.fullName,
+        'Відділ': user.department,
+        'Команда': user.team,
+        'Дата': date.toISOString().split('T')[0],
+        'Час': time,
+        'Причина': reason,
+        'Дата створення': new Date().toISOString()
       });
       
       console.log(`✅ Збережено спізнення: ${user.fullName} - ${date.toISOString().split('T')[0]} ${time}`);
@@ -5188,7 +5349,8 @@ async function processSickReport(chatId, telegramId, sickData) {
     }
     
     const { date } = sickData;
-    await saveSickRecord(telegramId, user, date);
+    const dateObj = new Date(date);
+    await saveSickRecord(telegramId, user, dateObj);
     
     // Перевіряємо чи є PM
     const pm = await getPMForUser(user);
@@ -5376,32 +5538,42 @@ async function getSickStatsForCurrentMonth(telegramId) {
   }
 }
 
-async function saveSickRecord(telegramId, user, date) {
+async function saveSickRecord(telegramId, user, startDate, endDate = null) {
   return executeWithRetryAndMonitor(
     async () => {
       if (!doc) throw new Error('Google Sheets не підключено');
       await doc.loadInfo();
-      let sheet = doc.sheetsByTitle['Sick'];
+      let sheet = doc.sheetsByTitle['Лікарняні'];
       if (!sheet) {
         sheet = await doc.addSheet({
-          title: 'Sick',
-          headerValues: ['TelegramID', 'FullName', 'Department', 'Team', 'Date', 'CreatedAt']
+          title: 'Лікарняні',
+          headerValues: [
+            'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 
+            'Дата початку', 'Дата закінчення', 'Термін (днів)', 'Причина', 'Дата створення'
+          ]
         });
       }
       
+      // Якщо endDate не вказано, вважаємо що це один день
+      const endDateObj = endDate || startDate;
+      const daysCount = Math.ceil((endDateObj - startDate) / (1000 * 60 * 60 * 24)) + 1;
+      
       await sheet.addRow({
-        TelegramID: telegramId,
-        FullName: user.fullName,
-        Department: user.department,
-        Team: user.team,
-        Date: date.toISOString().split('T')[0],
-        CreatedAt: new Date().toISOString()
+        'TelegramID': telegramId,
+        'Ім\'я та прізвище': user.fullName,
+        'Відділ': user.department,
+        'Команда': user.team,
+        'Дата початку': startDate.toISOString().split('T')[0],
+        'Дата закінчення': endDateObj.toISOString().split('T')[0],
+        'Термін (днів)': daysCount,
+        'Причина': '',
+        'Дата створення': new Date().toISOString()
       });
       
-      console.log(`✅ Збережено лікарняний: ${user.fullName} - ${date.toISOString().split('T')[0]}`);
+      console.log(`✅ Збережено лікарняний: ${user.fullName} - ${startDate.toISOString().split('T')[0]} (${daysCount} днів)`);
     },
     'saveSickRecord',
-    { telegramId, date: date.toISOString().split('T')[0] }
+    { telegramId, startDate: startDate.toISOString().split('T')[0] }
   ).catch(error => {
     logger.error('Failed to save sick record after retries', error, { telegramId });
     throw error;
