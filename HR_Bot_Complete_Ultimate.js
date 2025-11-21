@@ -5135,17 +5135,6 @@ async function handleLateProcess(chatId, telegramId, text) {
       return true;
     }
     
-    if (regData.step === 'late_reason') {
-      if (!text || text.trim().length < 3) {
-        await sendMessage(chatId, '❌ Будь ласка, вкажіть причину (мінімум 3 символи).');
-        return true;
-      }
-      regData.data.reason = text.trim();
-      await processLateReport(chatId, telegramId, regData.data);
-      registrationCache.delete(telegramId);
-      return true;
-    }
-    
     return false;
   } catch (error) {
     console.error('❌ Помилка handleLateProcess:', error);
