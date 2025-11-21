@@ -1825,6 +1825,102 @@ async function showStatsMenu(chatId, telegramId) {
   }
 }
 
+// 📅 ЗВІТ ЗА МІСЯЦЬ
+async function showMonthlyStats(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showStatsMenu', {});
+    
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
+      return;
+    }
+    
+    const now = new Date();
+    const monthName = now.toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' });
+    
+    // Отримуємо статистику
+    const vacationBalance = await getVacationBalance(telegramId);
+    
+    // Отримуємо статистику Remote за місяць
+    let remoteCount = 0;
+    if (doc) {
+      try {
+        await doc.loadInfo();
+        const remotesSheet = doc.sheetsByTitle['Remotes'];
+        if (remotesSheet) {
+          const rows = await remotesSheet.getRows();
+          const currentMonth = now.getMonth();
+          const currentYear = now.getFullYear();
+          remoteCount = rows.filter(row => {
+            if (row.get('TelegramID') != telegramId) return false;
+            const date = new Date(row.get('Date'));
+            return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+          }).length;
+        }
+      } catch (error) {
+        console.error('Помилка отримання Remote статистики:', error);
+      }
+    }
+    
+    // Отримуємо статистику спізнень за місяць
+    let lateCount = 0;
+    if (doc) {
+      try {
+        await doc.loadInfo();
+        const latesSheet = doc.sheetsByTitle['Lates'];
+        if (latesSheet) {
+          const rows = await latesSheet.getRows();
+          const currentMonth = now.getMonth();
+          const currentYear = now.getFullYear();
+          lateCount = rows.filter(row => {
+            if (row.get('TelegramID') != telegramId) return false;
+            const date = new Date(row.get('Date'));
+            return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+          }).length;
+        }
+      } catch (error) {
+        console.error('Помилка отримання статистики спізнень:', error);
+      }
+    }
+    
+    let text = `📊 <b>Моя статистика за ${monthName}</b>\n\n`;
+    text += `👤 <b>${user.fullName}</b>\n`;
+    if (user.position) text += `💼 ${user.position}\n`;
+    if (user.department) {
+      text += `🏢 ${user.department}`;
+      if (user.team) text += ` / ${user.team}`;
+      text += `\n`;
+    }
+    text += `\n`;
+    
+    text += `🏖️ <b>Відпустки:</b>\n`;
+    text += `💰 Баланс: ${vacationBalance.remaining}/${vacationBalance.annual} днів\n`;
+    text += `📅 Використано: ${vacationBalance.used} днів\n\n`;
+    
+    text += `📈 <b>Статистика за ${monthName}:</b>\n`;
+    text += `🏠 Remote: ${remoteCount} днів`;
+    if (user.workMode && user.workMode !== 'Онлайн') {
+      text += ` (ліміт: 14)`;
+    }
+    text += `\n`;
+    text += `⏰ Спізнення: ${lateCount} разів`;
+    if (lateCount >= 7) {
+      text += ` ⚠️`;
+    }
+    
+    const keyboard = {
+      inline_keyboard: []
+    };
+    
+    addBackButton(keyboard, telegramId, 'showMonthlyStats');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showMonthlyStats:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження статистики.');
+  }
+}
+
 // 🔧 ДОПОМІЖНІ ФУНКЦІЇ ДЛЯ РОБОЧОГО РОКУ
 /**
  * Отримує дати початку та кінця робочого року для користувача
