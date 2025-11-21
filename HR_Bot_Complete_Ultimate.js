@@ -991,15 +991,33 @@ async function getUserInfo(telegramId) {
     });
     
     if (user) {
+      // Визначаємо, яка таблиця використовується (українська чи англійська)
+      const isUkrainianSheet = sheet.title === 'Працівники';
+      
       const userData = {
         telegramId: parseInt(user.get('TelegramID')),
-        fullName: user.get('FullName'),
-        department: user.get('Department'),
-        team: user.get('Team'),
-        position: user.get('Position'),
-        birthDate: user.get('BirthDate'),
-        firstWorkDay: user.get('FirstWorkDay'),
-        workMode: user.get('WorkMode'),
+        fullName: user.get(isUkrainianSheet ? 'Ім\'я та прізвище' : 'FullName') || 
+                  user.get('FullName') || 
+                  user.get('Ім\'я та прізвище'),
+        department: user.get(isUkrainianSheet ? 'Відділ' : 'Department') || 
+                    user.get('Department') || 
+                    user.get('Відділ'),
+        team: user.get(isUkrainianSheet ? 'Команда' : 'Team') || 
+              user.get('Team') || 
+              user.get('Команда'),
+        position: user.get(isUkrainianSheet ? 'Посада' : 'Position') || 
+                  user.get('Position') || 
+                  user.get('Посада'),
+        birthDate: user.get(isUkrainianSheet ? 'Дата народження' : 'BirthDate') || 
+                   user.get('BirthDate') || 
+                   user.get('Дата народження'),
+        firstWorkDay: user.get(isUkrainianSheet ? 'Перший робочий день' : 'FirstWorkDay') || 
+                      user.get('FirstWorkDay') || 
+                      user.get('Перший робочий день'),
+        workMode: user.get(isUkrainianSheet ? 'Режим роботи' : 'WorkMode') || 
+                  user.get('WorkMode') || 
+                  user.get('Режим роботи') || 
+                  'Hybrid',
         pm: user.get('PM') || null
       };
       
@@ -1972,6 +1990,13 @@ async function showRemoteMenu(chatId, telegramId) {
 // ⏰ МЕНЮ СПІЗНЕНЬ
 async function showLateMenu(chatId, telegramId) {
   try {
+    // Перевіряємо, чи користувач існує
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію через /start');
+      return;
+    }
+    
     // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
