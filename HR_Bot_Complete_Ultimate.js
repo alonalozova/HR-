@@ -1067,7 +1067,7 @@ async function getPMForUser(user) {
     
     // Шукаємо PM по градації (відділ/команда)
     await doc.loadInfo();
-    const employeesSheet = doc.sheetsByTitle['Employees'];
+    const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
     if (!employeesSheet) return null;
     
     const rows = await employeesSheet.getRows();
@@ -3316,7 +3316,7 @@ async function sendMailing(chatId, telegramId, mailingData, message) {
     }
 
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Employees'];
+    const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
     if (!sheet) {
       await sendMessage(chatId, '❌ Таблиця співробітників не знайдена.');
       return;
@@ -4526,7 +4526,7 @@ async function showHRExportEmployee(chatId, telegramId) {
     }
     
     await doc.loadInfo();
-    const employeesSheet = doc.sheetsByTitle['Employees'];
+    const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
     if (!employeesSheet) {
       await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
       return;
@@ -4617,7 +4617,7 @@ async function showHRExportDepartment(chatId, telegramId) {
     }
     
     await doc.loadInfo();
-    const employeesSheet = doc.sheetsByTitle['Employees'];
+    const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
     if (!employeesSheet) {
       await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
       return;
@@ -4803,7 +4803,7 @@ async function exportDepartmentData(chatId, telegramId, department) {
     await doc.loadInfo();
     
     // Отримуємо всіх працівників відділу
-    const employeesSheet = doc.sheetsByTitle['Employees'];
+    const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
     if (!employeesSheet) {
       await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
       return;
@@ -5653,7 +5653,7 @@ async function showHRDashboardStats(chatId, telegramId) {
         });
 
         // Отримуємо кількість працівників
-        const employeesSheet = doc.sheetsByTitle['Employees'];
+        const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
         const allEmployees = employeesSheet ? await employeesSheet.getRows() : [];
         const totalEmployees = allEmployees.length;
 
