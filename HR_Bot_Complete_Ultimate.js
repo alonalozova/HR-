@@ -1351,99 +1351,25 @@ async function completeRegistration(chatId, telegramId, data) {
     
     // Збереження в Google Sheets
     if (doc) {
-      // Перевіряємо підключення та перепідключаємося, якщо потрібно
-      try {
-        await doc.loadInfo();
-      } catch (error) {
-        console.warn('⚠️ Помилка завантаження Google Sheets, спробуємо перепідключитися...');
-        const reconnected = await initGoogleSheets();
-        if (!reconnected || !doc) {
-          throw new Error('Google Sheets не підключено');
-        }
-      }
-      
+      await doc.loadInfo();
       let sheet = doc.sheetsByTitle['Employees'];
       if (!sheet) {
-        // Створюємо лист з правильними заголовками
-        sheet = await doc.addSheet({ 
-          title: 'Employees', 
-          headerValues: [
-            'TelegramID',      // 1. Telegram ID (автоматично)
-            'FullName',        // 2. Прізвище ім'я
-            'BirthDate',       // 3. Дата народження
-            'Department',      // 4. Відділ
-            'Team',            // 5. Команда
-            'Position',         // 6. Посада
-            'FirstWorkDay',    // 7. Перший робочий день
-            'WorkMode',        // 8. Режим роботи
-            'RegistrationDate' // 9. Дата реєстрації
-          ] 
-        });
-        console.log('✅ Створено новий лист Employees з правильними заголовками');
+        sheet = await doc.addSheet({ title: 'Employees', headerValues: ['TelegramID', 'FullName', 'Department', 'Team', 'Position', 'BirthDate', 'FirstWorkDay', 'WorkMode', 'RegistrationDate'] });
       }
       
-      // Перевіряємо, чи користувач вже існує
-      const rows = await sheet.getRows();
-      const existingUser = rows.find(row => row.get('TelegramID') == telegramId);
+      await sheet.addRow({
+        TelegramID: telegramId,
+        FullName: fullName,
+        Department: data.department,
+        Team: data.team,
+        Position: data.position,
+        BirthDate: data.birthDate,
+        FirstWorkDay: data.firstWorkDay,
+        WorkMode: 'Hybrid',
+        RegistrationDate: new Date().toISOString()
+      });
       
-      if (existingUser) {
-        // Оновлюємо існуючого користувача
-        existingUser.set('FullName', fullName);
-        existingUser.set('BirthDate', data.birthDate);
-        existingUser.set('Department', data.department);
-        existingUser.set('Team', data.team);
-        existingUser.set('Position', data.position);
-        existingUser.set('FirstWorkDay', data.firstWorkDay);
-        existingUser.set('WorkMode', 'Hybrid');
-        existingUser.set('RegistrationDate', new Date().toISOString());
-        await existingUser.save();
-        console.log(`✅ Оновлено дані користувача ${telegramId} (${fullName}) в Google Sheets`);
-      } else {
-        // Додаємо нового користувача
-        await sheet.addRow({
-          TelegramID: parseInt(telegramId), // Автоматично фіксується Telegram ID
-          FullName: fullName,                // Прізвище ім'я
-          BirthDate: data.birthDate,         // Дата народження
-          Department: data.department,       // Відділ
-          Team: data.team,                   // Команда
-          Position: data.position,            // Посада
-          FirstWorkDay: data.firstWorkDay,   // Перший робочий день
-          WorkMode: 'Hybrid',                // Режим роботи
-          RegistrationDate: new Date().toISOString() // Дата реєстрації
-        });
-        console.log(`✅ Користувач ${telegramId} (${fullName}) збережено в Google Sheets`);
-      }
-    } else {
-      console.warn('⚠️ Google Sheets не підключено, спробуємо перепідключитися...');
-      const reconnected = await initGoogleSheets();
-      if (reconnected && doc) {
-        // Повторюємо спробу збереження
-        await doc.loadInfo();
-        let sheet = doc.sheetsByTitle['Employees'];
-        if (!sheet) {
-          sheet = await doc.addSheet({ 
-            title: 'Employees', 
-            headerValues: [
-              'TelegramID', 'FullName', 'BirthDate', 'Department', 'Team', 
-              'Position', 'FirstWorkDay', 'WorkMode', 'RegistrationDate'
-            ] 
-          });
-        }
-        await sheet.addRow({
-          TelegramID: parseInt(telegramId),
-          FullName: fullName,
-          BirthDate: data.birthDate,
-          Department: data.department,
-          Team: data.team,
-          Position: data.position,
-          FirstWorkDay: data.firstWorkDay,
-          WorkMode: 'Hybrid',
-          RegistrationDate: new Date().toISOString()
-        });
-        console.log(`✅ Користувач ${telegramId} (${fullName}) збережено після перепідключення`);
-      } else {
-        throw new Error('Не вдалося підключитися до Google Sheets');
-      }
+      console.log(`✅ Користувач ${telegramId} (${fullName}) збережено в Google Sheets`);
     }
 
     // Очищаємо кеш реєстрації
