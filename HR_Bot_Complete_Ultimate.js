@@ -1798,6 +1798,18 @@ async function showStatsMenu(chatId, telegramId) {
       return;
     }
     
+    // Перевіряємо підключення до Google Sheets
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено в showStatsMenu, спробуємо перепідключитися...');
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        await sendMessage(chatId, '⚠️ Google Sheets тимчасово недоступні. Статистика може бути обмежена. Спробуйте пізніше.');
+        // Все одно показуємо меню, але з попередженням
+      } else {
+        console.log('✅ Google Sheets перепідключено успішно в showStatsMenu');
+      }
+    }
+    
     const role = await getUserRole(telegramId);
     const isHRorCEO = role === 'HR' || role === 'CEO';
     
@@ -1833,6 +1845,7 @@ async function showStatsMenu(chatId, telegramId) {
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showStatsMenu:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження меню статистики.');
   }
 }
 
@@ -1898,9 +1911,15 @@ async function showVacationStatsReport(chatId, telegramId, targetTelegramId = nu
       return;
     }
     
+    // Перевіряємо та перепідключаємося до Google Sheets
     if (!doc) {
-      await sendMessage(chatId, '❌ Google Sheets не підключено.');
-      return;
+      console.warn('⚠️ Google Sheets не підключено в showVacationStatsReport, спробуємо перепідключитися...');
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        await sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до HR.');
+        return;
+      }
+      console.log('✅ Google Sheets перепідключено успішно в showVacationStatsReport');
     }
     
     await doc.loadInfo();
@@ -2004,9 +2023,15 @@ async function showRemoteStatsReport(chatId, telegramId, targetTelegramId = null
       return;
     }
     
+    // Перевіряємо та перепідключаємося до Google Sheets
     if (!doc) {
-      await sendMessage(chatId, '❌ Google Sheets не підключено.');
-      return;
+      console.warn('⚠️ Google Sheets не підключено в showRemoteStatsReport, спробуємо перепідключитися...');
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        await sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до HR.');
+        return;
+      }
+      console.log('✅ Google Sheets перепідключено успішно в showRemoteStatsReport');
     }
     
     await doc.loadInfo();
@@ -2100,9 +2125,15 @@ async function showLatesStatsReport(chatId, telegramId, targetTelegramId = null,
       return;
     }
     
+    // Перевіряємо та перепідключаємося до Google Sheets
     if (!doc) {
-      await sendMessage(chatId, '❌ Google Sheets не підключено.');
-      return;
+      console.warn('⚠️ Google Sheets не підключено в showLatesStatsReport, спробуємо перепідключитися...');
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        await sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до HR.');
+        return;
+      }
+      console.log('✅ Google Sheets перепідключено успішно в showLatesStatsReport');
     }
     
     await doc.loadInfo();
