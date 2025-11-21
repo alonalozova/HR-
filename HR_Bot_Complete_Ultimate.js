@@ -306,10 +306,8 @@ async function executeWithRetryAndMonitor(fn, operationName, options = {}) {
 const DEPARTMENTS = {
   'Marketing': {
     'PPC': ['PPC', 'PM PPC'],
-    'Target': {
-      'Kris team': ['Team lead', 'PM target'],
-      'Lera team': ['Team lead', 'PM target']
-    }
+    'Target/Kris team': ['Team lead', 'PM target', 'Target specialist', 'Target manager'],
+    'Target/Lera team': ['Team lead', 'PM target', 'Target specialist', 'Target manager']
   },
   'Design': {
     'Head of Design': ['Head of Design'],
@@ -1459,18 +1457,44 @@ async function handleTeamSelection(chatId, telegramId, team) {
     const keyboard = { inline_keyboard: [] };
     const department = regData.data.department;
     
+    // Перевіряємо, чи є команда в структурі
     if (DEPARTMENTS[department] && DEPARTMENTS[department][team]) {
       const positions = DEPARTMENTS[department][team];
-      for (const position of positions) {
-        keyboard.inline_keyboard.push([
-          { text: position, callback_data: `position_${position}` }
-        ]);
+      
+      // Якщо positions - це масив, показуємо посади
+      if (Array.isArray(positions)) {
+        for (const position of positions) {
+          keyboard.inline_keyboard.push([
+            { text: position, callback_data: `position_${position}` }
+          ]);
+        }
+      } 
+      // Якщо positions - це об'єкт (вкладені команди), показуємо підкоманди
+      else if (typeof positions === 'object') {
+        const subteams = Object.keys(positions);
+        for (const subteam of subteams) {
+          keyboard.inline_keyboard.push([
+            { text: subteam, callback_data: `team_${team}/${subteam}` }
+          ]);
+        }
       }
+    } else {
+      console.warn(`⚠️ Команда ${team} не знайдена в відділі ${department}`);
+      await sendMessage(chatId, `❌ Помилка: команда "${team}" не знайдена. Спробуйте ще раз.`);
+      return;
+    }
+
+    // Якщо немає кнопок, показуємо помилку
+    if (keyboard.inline_keyboard.length === 0) {
+      console.warn(`⚠️ Немає посад для команди ${team} в відділі ${department}`);
+      await sendMessage(chatId, `❌ Помилка: немає доступних посад для команди "${team}". Зверніться до HR.`);
+      return;
     }
 
     await sendMessage(chatId, `✅ Команда: <b>${team}</b>\n\nОберіть посаду:`, keyboard);
   } catch (error) {
     console.error('❌ Помилка handleTeamSelection:', error);
+    await sendMessage(chatId, '❌ Помилка обробки вибору команди. Спробуйте ще раз.');
   }
 }
 
