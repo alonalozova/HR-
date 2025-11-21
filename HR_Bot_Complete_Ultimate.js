@@ -1692,7 +1692,7 @@ async function showMyVacationRequests(chatId, telegramId) {
     }
     
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Vacations'];
+    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
     if (!sheet) {
       await sendMessage(chatId, '📋 У вас поки немає заявок на відпустку.');
       return;
@@ -2023,7 +2023,7 @@ async function showMonthlyStats(chatId, telegramId) {
     if (doc) {
       try {
         await doc.loadInfo();
-        const latesSheet = doc.sheetsByTitle['Lates'];
+        const latesSheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
         if (latesSheet) {
           const rows = await latesSheet.getRows();
           const currentMonth = now.getMonth();
@@ -2169,7 +2169,7 @@ async function showVacationStatsReport(chatId, telegramId, targetTelegramId = nu
     }
     
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Vacations'];
+    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
     if (!sheet) {
       await sendMessage(chatId, '❌ Таблиця відпусток не знайдена.');
       return;
@@ -4690,7 +4690,7 @@ async function exportEmployeeData(chatId, telegramId, targetTelegramId) {
     await doc.loadInfo();
     
     // Збираємо дані про відпустки
-    const vacationsSheet = doc.sheetsByTitle['Vacations'];
+    const vacationsSheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
     const vacations = vacationsSheet ? (await vacationsSheet.getRows()).filter(row => 
       row.get('TelegramID') == targetTelegramId
     ) : [];
@@ -4822,7 +4822,7 @@ async function exportDepartmentData(chatId, telegramId, department) {
     report += `👥 <b>Кількість працівників:</b> ${employees.length}\n\n`;
     
     // Статистика по відпустках
-    const vacationsSheet = doc.sheetsByTitle['Vacations'];
+    const vacationsSheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
     const departmentVacations = vacationsSheet ? (await vacationsSheet.getRows()).filter(row => 
       row.get('Department') === department
     ) : [];
@@ -5609,7 +5609,7 @@ async function showHRDashboardStats(chatId, telegramId) {
         const currentYear = now.getFullYear();
 
         // Отримуємо статистику по відпустках
-        const vacationsSheet = doc.sheetsByTitle['Vacations'];
+        const vacationsSheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
         const allVacations = vacationsSheet ? await vacationsSheet.getRows() : [];
         
         const thisMonthVacations = allVacations.filter(v => {
@@ -5626,7 +5626,7 @@ async function showHRDashboardStats(chatId, telegramId) {
         );
 
         // Отримуємо статистику по спізненнях
-        const latesSheet = doc.sheetsByTitle['Lates'];
+        const latesSheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
         const allLates = latesSheet ? await latesSheet.getRows() : [];
         
         const thisMonthLates = allLates.filter(l => {
