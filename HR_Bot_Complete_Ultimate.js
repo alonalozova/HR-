@@ -4410,34 +4410,63 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
     }
     
     await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Vacations'];
+    // Спробуємо спочатку українську назву, потім англійську для сумісності
+    let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
     if (!sheet) {
       await sendMessage(chatId, '❌ Помилка: Таблиця відпусток не знайдена.');
       return;
     }
     
-    // Шукаємо заявку
+    // Шукаємо заявку (підтримуємо обидва формати назв колонок)
     const rows = await sheet.getRows();
-    const requestRow = rows.find(row => row.get('RequestID') === requestId);
+    const requestRow = rows.find(row => {
+      const rowId = row.get('ID заявки') || row.get('RequestID');
+      return rowId === requestId || String(rowId) === String(requestId);
+    });
     
     if (!requestRow) {
+      console.error(`❌ Заявка з ID ${requestId} не знайдена. Всього рядків: ${rows.length}`);
+      // Логуємо перші кілька ID для діагностики
+      if (rows.length > 0) {
+        const sampleIds = rows.slice(0, 5).map(r => {
+          const id = r.get('ID заявки') || r.get('RequestID') || 'N/A';
+          return id;
+        });
+        console.log(`📋 Приклади ID з таблиці:`, sampleIds);
+      }
       await sendMessage(chatId, `❌ Заявка з ID ${requestId} не знайдена.`);
       return;
     }
     
-    // Оновлюємо статус
+    // Оновлюємо статус (підтримуємо обидва формати назв колонок)
     const newStatus = approved ? 'approved' : 'rejected';
-    requestRow.set('Status', newStatus);
-    requestRow.set('ApprovedBy', telegramId);
-    requestRow.set('ApprovedAt', new Date().toISOString());
+    const isUkrainianSheet = sheet.title === 'Відпустки';
+    
+    if (isUkrainianSheet) {
+      requestRow.set('Статус', newStatus);
+      requestRow.set('Затверджено ким', telegramId);
+      requestRow.set('Дата затвердження', new Date().toISOString());
+    } else {
+      requestRow.set('Status', newStatus);
+      requestRow.set('ApprovedBy', telegramId);
+      requestRow.set('ApprovedAt', new Date().toISOString());
+    }
     await requestRow.save();
     
-    // Отримуємо дані заявки
+    // Отримуємо дані заявки (підтримуємо обидва формати назв колонок)
     const userTelegramId = parseInt(requestRow.get('TelegramID'));
-    const userFullName = requestRow.get('FullName');
-    const startDate = requestRow.get('StartDate');
-    const endDate = requestRow.get('EndDate');
-    const days = requestRow.get('Days');
+    const userFullName = isUkrainianSheet 
+      ? (requestRow.get('Ім\'я та прізвище') || requestRow.get('FullName'))
+      : requestRow.get('FullName');
+    const startDate = isUkrainianSheet 
+      ? (requestRow.get('Дата початку') || requestRow.get('StartDate'))
+      : requestRow.get('StartDate');
+    const endDate = isUkrainianSheet 
+      ? (requestRow.get('Дата закінчення') || requestRow.get('EndDate'))
+      : requestRow.get('EndDate');
+    const days = parseInt(isUkrainianSheet 
+      ? (requestRow.get('Кількість днів') || requestRow.get('Days'))
+      : requestRow.get('Days'));
     
     // Повідомляємо HR про успіх
     const hrMessage = approved 
