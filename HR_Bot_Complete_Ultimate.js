@@ -562,8 +562,10 @@ async function processMessage(message) {
     
     // Обробка реєстрації
     if (registrationCache.has(telegramId)) {
-      await handleRegistrationStep(chatId, telegramId, text);
-      return;
+      const handled = await handleRegistrationStep(chatId, telegramId, text);
+      if (handled) {
+        return; // Реєстрація оброблена, не показуємо загальне меню
+      }
     }
     
     // Обробка розсилки HR
@@ -1284,39 +1286,43 @@ async function handlePositionSelection(chatId, telegramId, position) {
 async function handleRegistrationStep(chatId, telegramId, text) {
   try {
     const regData = registrationCache.get(telegramId);
-    if (!regData) return;
+    if (!regData) return false;
 
     switch (regData.step) {
       case 'name':
         regData.data.name = text;
         regData.step = 'surname';
+        registrationCache.set(telegramId, regData);
         await sendMessage(chatId, `✅ Ім'я: <b>${text}</b>\n\n📝 Введіть ваше прізвище:`);
-        break;
+        return true;
 
       case 'surname':
         regData.data.surname = text;
         regData.step = 'birthdate';
+        registrationCache.set(telegramId, regData);
         await sendMessage(chatId, `✅ Прізвище: <b>${text}</b>\n\n📅 Введіть дату народження (ДД.ММ.РРРР):`);
-        break;
+        return true;
 
       case 'birthdate':
         if (!isValidDate(text)) {
           await sendMessage(chatId, '❌ Неправильний формат дати. Використовуйте ДД.ММ.РРРР');
-          return;
+          return true; // Повертаємо true, щоб не показувати загальне меню
         }
         regData.data.birthDate = text;
         regData.step = 'firstworkday';
+        registrationCache.set(telegramId, regData);
         await sendMessage(chatId, `✅ Дата народження: <b>${text}</b>\n\n📅 Введіть перший робочий день (ДД.ММ.РРРР):`);
-        break;
+        return true;
 
       case 'firstworkday':
         if (!isValidDate(text)) {
           await sendMessage(chatId, '❌ Неправильний формат дати. Використовуйте ДД.ММ.РРРР');
-          return;
+          return true; // Повертаємо true, щоб не показувати загальне меню
         }
         regData.data.firstWorkDay = text;
+        registrationCache.set(telegramId, regData);
         await completeRegistration(chatId, telegramId, regData.data);
-        break;
+        return true;
 
       case 'asap_message':
         // Обробка ASAP запиту з категорією
@@ -1324,10 +1330,13 @@ async function handleRegistrationStep(chatId, telegramId, text) {
         await processASAPRequest(chatId, telegramId, text, category);
         // Очищаємо кеш після обробки
         registrationCache.delete(telegramId);
-        break;
+        return true;
     }
+    
+    return false;
   } catch (error) {
     console.error('❌ Помилка handleRegistrationStep:', error);
+    return false;
   }
 }
 
