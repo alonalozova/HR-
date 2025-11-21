@@ -1486,10 +1486,15 @@ async function getVacationBalance(telegramId) {
       return total + (days || Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1);
     }, 0);
     
+    const annual = 24; // 24 календарних дні на рік
+    const remaining = Math.max(0, annual - usedDays);
+    
     return {
       used: usedDays,
-      total: 24,
-      available: Math.max(0, 24 - usedDays)
+      total: annual,
+      annual: annual,
+      available: remaining,
+      remaining: remaining
     };
   } catch (error) {
     console.error('❌ Помилка getVacationBalance:', error);
@@ -1929,10 +1934,26 @@ async function showMonthlyStats(chatId, telegramId) {
 function getWorkYearDates(firstWorkDay) {
   if (!firstWorkDay) return null;
   
-  const firstDay = new Date(firstWorkDay);
+  // Парсимо дату першого робочого дня (формат ДД.ММ.РРРР або Date)
+  let firstDay;
+  if (typeof firstWorkDay === 'string') {
+    const parts = firstWorkDay.split('.');
+    if (parts.length === 3) {
+      firstDay = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+    } else {
+      firstDay = new Date(firstWorkDay);
+    }
+  } else {
+    firstDay = new Date(firstWorkDay);
+  }
+  
+  if (isNaN(firstDay.getTime())) return null;
+  
   const now = new Date();
   
   // Знаходимо початок поточного робочого року
+  // Робочий рік = 12 місяців від першого робочого дня
+  // Наприклад: 06.06.2023 - 05.06.2024 (включно)
   let workYearStart = new Date(firstDay);
   workYearStart.setFullYear(now.getFullYear());
   
@@ -1941,7 +1962,7 @@ function getWorkYearDates(firstWorkDay) {
     workYearStart.setFullYear(now.getFullYear() - 1);
   }
   
-  // Кінець робочого року = початок + 12 місяців - 1 день
+  // Кінець робочого року = початок + 12 місяців - 1 день (включно)
   const workYearEnd = new Date(workYearStart);
   workYearEnd.setMonth(workYearEnd.getMonth() + 12);
   workYearEnd.setDate(workYearEnd.getDate() - 1);
@@ -3633,8 +3654,16 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     
     // Перевіряємо баланс відпусток
     const balance = await getVacationBalance(telegramId);
-    if (balance.available < daysNum) {
-      await sendMessage(chatId, `❌ Недостатньо днів відпустки. Доступно: ${balance.available} днів, потрібно: ${daysNum} днів.`);
+    if (balance.remaining < daysNum) {
+      // Якщо днів немає або недостатньо - відмовляємо і повідомляємо HR
+      const remainingText = balance.remaining === 0 
+        ? 'У вас залишилось 0 днів відпустки' 
+        : `У вас залишилось ${balance.remaining} днів відпустки`;
+      
+      await sendMessage(chatId, `❌ <b>Відпустку відмовлено</b>\n\n${remainingText}. Потрібно: ${daysNum} днів.\n\nЗверніться до HR для уточнення.`);
+      
+      // Одразу повідомляємо HR про спробу взяти відпустку без днів
+      await notifyHRAboutVacationDenial(user, startDateObj, endDate, daysNum, balance.remaining);
       return;
     }
     
@@ -3932,6 +3961,38 @@ async function notifyHRAboutVacationRequest(user, requestId, startDate, endDate,
     });
   } catch (error) {
     console.error('❌ Помилка notifyHRAboutVacationRequest:', error);
+  }
+}
+
+// 🚨 ПОВІДОМЛЕННЯ HR ПРО ВІДМОВУ ВІДПУСТКИ (НЕДОСТАТНЬО ДНІВ)
+async function notifyHRAboutVacationDenial(user, startDate, endDate, days, remainingDays) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    let message = `🚨 <b>СПРОБА ВЗЯТИ ВІДПУСТКУ БЕЗ ДОСТАТНЬОЇ КІЛЬКОСТІ ДНІВ</b>\n\n`;
+    message += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
+    message += `🏢 <b>Відділ:</b> ${user.department}\n`;
+    if (user.team) message += `👥 <b>Команда:</b> ${user.team}\n`;
+    message += `📅 <b>Запитуваний період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n`;
+    message += `📊 <b>Запитано днів:</b> ${days}\n`;
+    message += `💰 <b>Залишилось днів:</b> ${remainingDays}\n\n`;
+    message += `⚠️ <b>Відпустку автоматично відмовлено.</b>\n`;
+    message += `Користувачу відправлено повідомлення з проханням звернутися до HR.\n\n`;
+    message += `💡 <b>Рекомендація:</b> Перевірте баланс відпусток та можливість надання додаткових днів.`;
+    
+    await sendMessage(HR_CHAT_ID, message);
+    
+    // Логування
+    await logUserData(user.telegramId, 'hr_vacation_denial_notification', {
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      days,
+      remainingDays,
+      department: user.department,
+      team: user.team
+    });
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutVacationDenial:', error);
   }
 }
 
