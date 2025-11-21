@@ -1900,8 +1900,11 @@ async function showMonthlyStats(chatId, telegramId) {
     text += `\n`;
     
     text += `🏖️ <b>Відпустки:</b>\n`;
-    text += `💰 Баланс: ${vacationBalance.remaining}/${vacationBalance.annual} днів\n`;
-    text += `📅 Використано: ${vacationBalance.used} днів\n\n`;
+    const annual = vacationBalance.annual || vacationBalance.total || 24;
+    const remaining = vacationBalance.remaining || vacationBalance.available || 0;
+    const used = vacationBalance.used || 0;
+    text += `💰 Баланс: ${remaining}/${annual} днів\n`;
+    text += `📅 Використано: ${used} днів\n\n`;
     
     text += `📈 <b>Статистика за ${monthName}:</b>\n`;
     text += `🏠 Remote: ${remoteCount} днів`;
