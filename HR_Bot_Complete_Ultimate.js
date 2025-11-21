@@ -1449,17 +1449,24 @@ async function handleDepartmentSelection(chatId, telegramId, department) {
 async function handleTeamSelection(chatId, telegramId, team) {
   try {
     const regData = registrationCache.get(telegramId);
-    if (!regData) return;
+    if (!regData) {
+      console.warn(`⚠️ Немає даних реєстрації для ${telegramId}`);
+      return;
+    }
 
+    const department = regData.data.department;
+    console.log(`🔍 Обробка вибору команди: department=${department}, team=${team}`);
+    
     regData.data.team = team;
     regData.step = 'position';
+    registrationCache.set(telegramId, regData);
 
     const keyboard = { inline_keyboard: [] };
-    const department = regData.data.department;
     
     // Перевіряємо, чи є команда в структурі
     if (DEPARTMENTS[department] && DEPARTMENTS[department][team]) {
       const positions = DEPARTMENTS[department][team];
+      console.log(`✅ Знайдено команду ${team}, посади:`, positions);
       
       // Перевіряємо, чи positions - це масив
       if (Array.isArray(positions)) {
@@ -1468,12 +1475,14 @@ async function handleTeamSelection(chatId, telegramId, team) {
             { text: position, callback_data: `position_${position}` }
           ]);
         }
+        console.log(`✅ Додано ${positions.length} посад для команди ${team}`);
       } else {
-        console.warn(`⚠️ Посади для команди ${team} не є масивом`);
+        console.warn(`⚠️ Посади для команди ${team} не є масивом, тип:`, typeof positions);
       }
     } else {
       console.warn(`⚠️ Команда ${team} не знайдена в відділі ${department}`);
-      await sendMessage(chatId, `❌ Помилка: команда "${team}" не знайдена. Спробуйте ще раз.`);
+      console.warn(`⚠️ Доступні команди в ${department}:`, DEPARTMENTS[department] ? Object.keys(DEPARTMENTS[department]) : 'відділ не знайдено');
+      await sendMessage(chatId, `❌ Помилка: команда "${team}" не знайдена в відділі "${department}". Спробуйте ще раз.`);
       return;
     }
 
@@ -1487,6 +1496,7 @@ async function handleTeamSelection(chatId, telegramId, team) {
     await sendMessage(chatId, `✅ Команда: <b>${team}</b>\n\nОберіть посаду:`, keyboard);
   } catch (error) {
     console.error('❌ Помилка handleTeamSelection:', error);
+    console.error('❌ Stack:', error.stack);
     await sendMessage(chatId, '❌ Помилка обробки вибору команди. Спробуйте ще раз.');
   }
 }
