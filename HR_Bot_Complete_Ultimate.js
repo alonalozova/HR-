@@ -1461,22 +1461,15 @@ async function handleTeamSelection(chatId, telegramId, team) {
     if (DEPARTMENTS[department] && DEPARTMENTS[department][team]) {
       const positions = DEPARTMENTS[department][team];
       
-      // Якщо positions - це масив, показуємо посади
+      // Перевіряємо, чи positions - це масив
       if (Array.isArray(positions)) {
         for (const position of positions) {
           keyboard.inline_keyboard.push([
             { text: position, callback_data: `position_${position}` }
           ]);
         }
-      } 
-      // Якщо positions - це об'єкт (вкладені команди), показуємо підкоманди
-      else if (typeof positions === 'object') {
-        const subteams = Object.keys(positions);
-        for (const subteam of subteams) {
-          keyboard.inline_keyboard.push([
-            { text: subteam, callback_data: `team_${team}/${subteam}` }
-          ]);
-        }
+      } else {
+        console.warn(`⚠️ Посади для команди ${team} не є масивом`);
       }
     } else {
       console.warn(`⚠️ Команда ${team} не знайдена в відділі ${department}`);
