@@ -5212,7 +5212,8 @@ async function getLateStatsForCurrentMonth(telegramId) {
   try {
     if (!doc) return { count: 0 };
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Lates'];
+    // Спробуємо спочатку українську назву, потім англійську для сумісності
+    const sheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
     if (!sheet) return { count: 0 };
     
     const rows = await sheet.getRows();
@@ -5222,7 +5223,10 @@ async function getLateStatsForCurrentMonth(telegramId) {
     
     const userLate = rows.filter(row => {
       if (row.get('TelegramID') != telegramId) return false;
-      const rowDate = new Date(row.get('Date'));
+      // Підтримуємо обидва формати назв колонок
+      const dateValue = row.get('Дата') || row.get('Date');
+      if (!dateValue) return false;
+      const rowDate = new Date(dateValue);
       return rowDate.getMonth() === currentMonth && rowDate.getFullYear() === currentYear;
     });
     
