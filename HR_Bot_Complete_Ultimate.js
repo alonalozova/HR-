@@ -5100,8 +5100,34 @@ async function handleLateProcess(chatId, telegramId, text) {
         return true;
       }
       regData.data.time = text;
-      regData.step = 'late_reason';
-      await sendMessage(chatId, '📝 <b>Вкажіть причину спізнення:</b>');
+      regData.step = 'late_reason_choice';
+      registrationCache.set(telegramId, regData);
+      
+      // Показуємо кнопки для вибору: додати причину або пропустити
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: '📝 Додати причину', callback_data: 'late_add_reason' }
+          ],
+          [
+            { text: '⏭️ Пропустити', callback_data: 'late_skip_reason' }
+          ]
+        ]
+      };
+      addBackButton(keyboard, telegramId, 'late_time');
+      await sendMessage(chatId, '📝 <b>Чи хочете додати причину спізнення?</b>', keyboard);
+      return true;
+    }
+    
+    if (regData.step === 'late_reason_input') {
+      if (!text || text.trim().length < 3) {
+        await sendMessage(chatId, '❌ Будь ласка, вкажіть причину (мінімум 3 символи).');
+        return true;
+      }
+      regData.data.reason = text.trim();
+      registrationCache.set(telegramId, regData);
+      await processLateReport(chatId, telegramId, regData.data);
+      registrationCache.delete(telegramId);
       return true;
     }
     
@@ -5135,12 +5161,26 @@ async function reportLate(chatId, telegramId) {
     }
     
     registrationCache.set(telegramId, {
-      step: 'late_date',
+      step: 'late_date_selection',
       data: {}
     });
     
-    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'reportLate');
-    await sendMessage(chatId, '⏰ <b>Повідомлення про спізнення</b>\n\n📅 <b>Вкажіть дату спізнення</b> (ДД.ММ.РРРР):\n\nЯкщо спізнення сьогодні, введіть сьогоднішню дату.', keyboard);
+    const today = new Date();
+    const todayFormatted = formatDate(today);
+    
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: `📅 Сьогодні (${todayFormatted})`, callback_data: 'late_today' }
+        ],
+        [
+          { text: '📅 Інша дата', callback_data: 'late_other_date' }
+        ]
+      ]
+    };
+    
+    addBackButton(keyboard, telegramId, 'reportLate');
+    await sendMessage(chatId, '⏰ <b>Повідомлення про спізнення</b>\n\n📅 <b>Оберіть дату спізнення:</b>', keyboard);
   } catch (error) {
     console.error('❌ Помилка reportLate:', error);
   }
