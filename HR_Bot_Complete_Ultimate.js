@@ -604,8 +604,30 @@ async function processCallback(callbackQuery) {
       'late_stats': () => showLateStats(chatId, telegramId),
       'sick_report': () => reportSick(chatId, telegramId),
       'sick_stats': () => showSickStats(chatId, telegramId),
-      'stats_monthly': () => showMonthlyStats(chatId, telegramId),
+      'stats_vacations': () => showVacationStatsReport(chatId, telegramId),
+      'stats_remote': () => showRemoteStatsReport(chatId, telegramId),
+      'stats_lates': () => showLatesStatsReport(chatId, telegramId),
       'stats_export': () => exportMyData(chatId, telegramId),
+      'export_employee': async () => {
+        const role = await getUserRole(telegramId);
+        if (role === 'HR') {
+          await showHRExportEmployee(chatId, telegramId);
+        } else if (role === 'CEO') {
+          await showCEOExportEmployee(chatId, telegramId);
+        } else {
+          await sendMessage(chatId, '❌ Доступ обмежено.');
+        }
+      },
+      'export_department': async () => {
+        const role = await getUserRole(telegramId);
+        if (role === 'HR') {
+          await showHRExportDepartment(chatId, telegramId);
+        } else if (role === 'CEO') {
+          await showCEOExportDepartment(chatId, telegramId);
+        } else {
+          await sendMessage(chatId, '❌ Доступ обмежено.');
+        }
+      },
       'onboarding_new': () => showNewEmployeeMenu(chatId, telegramId),
       'onboarding_notion': () => showNotionLink(chatId, telegramId),
       'onboarding_quiz': () => showOnboardingQuiz(chatId, telegramId),
@@ -756,6 +778,14 @@ async function processCallback(callbackQuery) {
     } else if (data.startsWith('vacation_hr_reject_')) {
       const requestId = data.replace('vacation_hr_reject_', '');
       await handleHRVacationApproval(chatId, telegramId, requestId, false);
+    } else if (data.startsWith('stats_lates_month_')) {
+      // Обробка вибору місяця для звіту по спізненнях
+      const parts = data.replace('stats_lates_month_', '').split('_');
+      if (parts.length === 2) {
+        const month = parseInt(parts[0]);
+        const year = parseInt(parts[1]);
+        await showLatesStatsReport(chatId, telegramId, null, month, year);
+      }
     } else if (data === 'emergency_vacation_confirm_yes') {
       const regData = registrationCache.get(telegramId);
       if (regData && regData.step === 'emergency_vacation_confirm_past_date') {
@@ -1411,13 +1441,17 @@ async function getVacationBalance(telegramId) {
   try {
     if (!doc) return { used: 0, total: 24, available: 24 };
     
+    const user = await getUserInfo(telegramId);
+    if (!user) return { used: 0, total: 24, available: 24 };
+    
     await doc.loadInfo();
     const sheet = doc.sheetsByTitle['Vacations'];
     if (!sheet) return { used: 0, total: 24, available: 24 };
     
     const rows = await sheet.getRows();
-    const currentYear = new Date().getFullYear();
+    const workYearDates = getWorkYearDates(user.firstWorkDay);
     
+    // Фільтруємо відпустки за робочий рік (або календарний рік, якщо немає дати першого робочого дня)
     const userVacations = rows.filter(row => {
       const rowTelegramId = row.get('TelegramID');
       const rowStatus = row.get('Status');
@@ -1428,7 +1462,14 @@ async function getVacationBalance(telegramId) {
       if (!rowStartDate) return false;
       
       const startDate = new Date(rowStartDate);
-      return startDate.getFullYear() === currentYear;
+      
+      // Якщо є дата першого робочого дня, використовуємо робочий рік
+      if (workYearDates) {
+        return isInWorkYear(startDate, user.firstWorkDay);
+      }
+      
+      // Інакше використовуємо календарний рік
+      return startDate.getFullYear() === new Date().getFullYear();
     });
     
     const usedDays = userVacations.reduce((total, row) => {
@@ -1751,28 +1792,421 @@ async function showStatsMenu(chatId, telegramId) {
     // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
+      return;
+    }
+    
+    const role = await getUserRole(telegramId);
+    const isHRorCEO = role === 'HR' || role === 'CEO';
+    
     const text = `📊 <b>Моя статистика</b>
 
 Тут ви можете переглянути ваші особисті звіти та дані.
 
-Оберіть дію:`;
+Оберіть тип звіту:`;
 
     const keyboard = {
       inline_keyboard: [
         [
-          { text: '📅 Звіт за місяць', callback_data: 'stats_monthly' }
+          { text: '🏖️ Відпустки', callback_data: 'stats_vacations' }
         ],
         [
-          { text: '📤 Експорт даних', callback_data: 'stats_export' }
+          { text: '🏠 Remote робота', callback_data: 'stats_remote' }
+        ],
+        [
+          { text: '⏰ Спізнення', callback_data: 'stats_lates' }
         ]
       ]
     };
+    
+    // Для HR/CEO додаємо опцію експорту
+    if (isHRorCEO) {
+      keyboard.inline_keyboard.push([
+        { text: '📤 Експорт даних', callback_data: 'stats_export' }
+      ]);
+    }
 
     // Додаємо кнопку "Назад"
     addBackButton(keyboard, telegramId, 'showStatsMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showStatsMenu:', error);
+  }
+}
+
+// 🔧 ДОПОМІЖНІ ФУНКЦІЇ ДЛЯ РОБОЧОГО РОКУ
+/**
+ * Отримує дати початку та кінця робочого року для користувача
+ * Робочий рік = 12 місяців від першого робочого дня
+ */
+function getWorkYearDates(firstWorkDay) {
+  if (!firstWorkDay) return null;
+  
+  const firstDay = new Date(firstWorkDay);
+  const now = new Date();
+  
+  // Знаходимо початок поточного робочого року
+  let workYearStart = new Date(firstDay);
+  workYearStart.setFullYear(now.getFullYear());
+  
+  // Якщо поточна дата раніше за річницю в цьому році, беремо попередній робочий рік
+  if (now < workYearStart) {
+    workYearStart.setFullYear(now.getFullYear() - 1);
+  }
+  
+  // Кінець робочого року = початок + 12 місяців - 1 день
+  const workYearEnd = new Date(workYearStart);
+  workYearEnd.setMonth(workYearEnd.getMonth() + 12);
+  workYearEnd.setDate(workYearEnd.getDate() - 1);
+  
+  return { start: workYearStart, end: workYearEnd };
+}
+
+/**
+ * Перевіряє, чи дата входить в робочий рік користувача
+ */
+function isInWorkYear(date, firstWorkDay) {
+  if (!firstWorkDay) return false;
+  const yearDates = getWorkYearDates(firstWorkDay);
+  if (!yearDates) return false;
+  return date >= yearDates.start && date <= yearDates.end;
+}
+
+// 🏖️ ЗВІТ ПО ВІДПУСТКАХ
+async function showVacationStatsReport(chatId, telegramId, targetTelegramId = null) {
+  try {
+    // Перевірка доступу
+    const role = await getUserRole(telegramId);
+    const isHRorCEO = role === 'HR' || role === 'CEO';
+    
+    // Якщо не HR/CEO, можна бачити тільки свою статистику
+    const reportTelegramId = targetTelegramId && isHRorCEO ? targetTelegramId : telegramId;
+    
+    if (targetTelegramId && !isHRorCEO) {
+      await sendMessage(chatId, '❌ Доступ обмежено. Ви можете переглядати тільки свою статистику.');
+      return;
+    }
+    
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showStatsMenu', {});
+    
+    const user = await getUserInfo(reportTelegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Vacations'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця відпусток не знайдена.');
+      return;
+    }
+    
+    const rows = await sheet.getRows();
+    const workYearDates = getWorkYearDates(user.firstWorkDay);
+    
+    // Фільтруємо відпустки користувача за робочий рік
+    const userVacations = rows.filter(row => {
+      const rowTelegramId = row.get('TelegramID');
+      if (rowTelegramId != reportTelegramId) return false;
+      
+      const startDateStr = row.get('StartDate');
+      if (!startDateStr) return false;
+      
+      const startDate = new Date(startDateStr);
+      if (workYearDates) {
+        return isInWorkYear(startDate, user.firstWorkDay);
+      }
+      // Якщо немає дати першого робочого дня, використовуємо календарний рік
+      return startDate.getFullYear() === new Date().getFullYear();
+    });
+    
+    // Обчислюємо статистику
+    const approvedVacations = userVacations.filter(v => 
+      v.get('Status') === 'approved' || v.get('Status') === 'Approved'
+    );
+    
+    let usedDays = 0;
+    const vacationList = [];
+    
+    approvedVacations.forEach(v => {
+      const days = parseInt(v.get('Days')) || 0;
+      usedDays += days;
+      const startDate = new Date(v.get('StartDate'));
+      const endDate = new Date(v.get('EndDate'));
+      vacationList.push({
+        startDate: formatDate(startDate),
+        endDate: formatDate(endDate),
+        days: days
+      });
+    });
+    
+    const totalDays = 24; // Стандартний ліміт
+    const availableDays = Math.max(0, totalDays - usedDays);
+    
+    // Формуємо звіт
+    let report = `🏖️ <b>Звіт по відпустках</b>\n\n`;
+    report += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
+    if (workYearDates) {
+      report += `📅 <b>Робочий рік:</b> ${formatDate(workYearDates.start)} - ${formatDate(workYearDates.end)}\n`;
+    }
+    report += `\n`;
+    report += `💰 <b>Використано:</b> ${usedDays} днів\n`;
+    report += `📊 <b>Залишилось:</b> ${availableDays} днів\n`;
+    report += `📈 <b>Загальний ліміт:</b> ${totalDays} днів\n\n`;
+    
+    if (vacationList.length > 0) {
+      report += `📋 <b>Взяті відпустки:</b>\n`;
+      vacationList.forEach((vac, index) => {
+        report += `${index + 1}. ${vac.startDate} - ${vac.endDate} (${vac.days} дн.)\n`;
+      });
+    } else {
+      report += `ℹ️ Відпустки ще не брались у поточному робочому році.\n`;
+    }
+    
+    const keyboard = { inline_keyboard: [] };
+    addBackButton(keyboard, telegramId, 'showVacationStatsReport');
+    await sendMessage(chatId, report, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showVacationStatsReport:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження звіту по відпустках.');
+  }
+}
+
+// 🏠 ЗВІТ ПО REMOTE РОБОТІ
+async function showRemoteStatsReport(chatId, telegramId, targetTelegramId = null) {
+  try {
+    // Перевірка доступу
+    const role = await getUserRole(telegramId);
+    const isHRorCEO = role === 'HR' || role === 'CEO';
+    
+    const reportTelegramId = targetTelegramId && isHRorCEO ? targetTelegramId : telegramId;
+    
+    if (targetTelegramId && !isHRorCEO) {
+      await sendMessage(chatId, '❌ Доступ обмежено. Ви можете переглядати тільки свою статистику.');
+      return;
+    }
+    
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showStatsMenu', {});
+    
+    const user = await getUserInfo(reportTelegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Remotes'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця Remote не знайдена.');
+      return;
+    }
+    
+    const rows = await sheet.getRows();
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    const workYearDates = getWorkYearDates(user.firstWorkDay);
+    
+    // Фільтруємо Remote дні
+    const allRemoteDays = rows.filter(row => {
+      if (row.get('TelegramID') != reportTelegramId) return false;
+      const dateStr = row.get('Date');
+      if (!dateStr) return false;
+      return true;
+    });
+    
+    // Remote дні за поточний місяць
+    const currentMonthRemote = allRemoteDays.filter(row => {
+      const date = new Date(row.get('Date'));
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    
+    // Remote дні за робочий рік
+    const workYearRemote = workYearDates 
+      ? allRemoteDays.filter(row => {
+          const date = new Date(row.get('Date'));
+          return isInWorkYear(date, user.firstWorkDay);
+        })
+      : allRemoteDays.filter(row => {
+          const date = new Date(row.get('Date'));
+          return date.getFullYear() === currentYear;
+        });
+    
+    // Формуємо звіт
+    let report = `🏠 <b>Звіт по Remote роботі</b>\n\n`;
+    report += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
+    if (workYearDates) {
+      report += `📅 <b>Робочий рік:</b> ${formatDate(workYearDates.start)} - ${formatDate(workYearDates.end)}\n`;
+    }
+    report += `\n`;
+    report += `📊 <b>За поточний місяць:</b> ${currentMonthRemote.length} днів\n`;
+    report += `📈 <b>За робочий рік:</b> ${workYearRemote.length} днів\n\n`;
+    
+    if (currentMonthRemote.length > 0) {
+      report += `📅 <b>Remote дні в поточному місяці:</b>\n`;
+      currentMonthRemote.slice(0, 10).forEach((row, index) => {
+        const date = new Date(row.get('Date'));
+        report += `${index + 1}. ${formatDate(date)}\n`;
+      });
+      if (currentMonthRemote.length > 10) {
+        report += `... та ще ${currentMonthRemote.length - 10} днів\n`;
+      }
+    }
+    
+    const keyboard = { inline_keyboard: [] };
+    addBackButton(keyboard, telegramId, 'showRemoteStatsReport');
+    await sendMessage(chatId, report, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showRemoteStatsReport:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження звіту по Remote роботі.');
+  }
+}
+
+// ⏰ ЗВІТ ПО СПІЗНЕННЯХ
+async function showLatesStatsReport(chatId, telegramId, targetTelegramId = null, month = null, year = null) {
+  try {
+    // Перевірка доступу
+    const role = await getUserRole(telegramId);
+    const isHRorCEO = role === 'HR' || role === 'CEO';
+    
+    const reportTelegramId = targetTelegramId && isHRorCEO ? targetTelegramId : telegramId;
+    
+    if (targetTelegramId && !isHRorCEO) {
+      await sendMessage(chatId, '❌ Доступ обмежено. Ви можете переглядати тільки свою статистику.');
+      return;
+    }
+    
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showStatsMenu', {});
+    
+    const user = await getUserInfo(reportTelegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Lates'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця спізнень не знайдена.');
+      return;
+    }
+    
+    const rows = await sheet.getRows();
+    const now = new Date();
+    
+    // Визначаємо місяць та рік для звіту
+    const reportMonth = month !== null ? month : now.getMonth();
+    const reportYear = year !== null ? year : now.getFullYear();
+    
+    // Фільтруємо спізнення за вибраний місяць
+    const monthLates = rows.filter(row => {
+      if (row.get('TelegramID') != reportTelegramId) return false;
+      const dateStr = row.get('Date');
+      if (!dateStr) return false;
+      const date = new Date(dateStr);
+      return date.getMonth() === reportMonth && date.getFullYear() === reportYear;
+    });
+    
+    // Формуємо звіт
+    const monthName = new Date(reportYear, reportMonth).toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' });
+    let report = `⏰ <b>Звіт по спізненнях</b>\n\n`;
+    report += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
+    report += `📅 <b>Період:</b> ${monthName}\n\n`;
+    report += `📊 <b>Кількість спізнень:</b> ${monthLates.length}\n\n`;
+    
+    if (monthLates.length > 0) {
+      report += `📋 <b>Дати спізнень:</b>\n`;
+      monthLates.forEach((row, index) => {
+        const date = new Date(row.get('Date'));
+        const reason = row.get('Reason') || 'Не вказано';
+        report += `${index + 1}. ${formatDate(date)} - ${reason}\n`;
+      });
+      
+      if (monthLates.length >= 7) {
+        report += `\n⚠️ <b>Увага!</b> Кількість спізнень перевищує 7 за місяць.`;
+      }
+    } else {
+      report += `✅ Спізнень не було в цьому місяці.`;
+    }
+    
+    const keyboard = { inline_keyboard: [] };
+    
+    // Додаємо кнопки для вибору місяця (тільки для поточного користувача або HR/CEO)
+    if (reportTelegramId === telegramId || isHRorCEO) {
+      // Можна додати кнопки для вибору іншого місяця
+      const prevMonth = reportMonth === 0 ? 11 : reportMonth - 1;
+      const prevYear = reportMonth === 0 ? reportYear - 1 : reportYear;
+      const nextMonth = reportMonth === 11 ? 0 : reportMonth + 1;
+      const nextYear = reportMonth === 11 ? reportYear + 1 : reportYear;
+      
+      keyboard.inline_keyboard.push([
+        { text: '⬅️ Попередній місяць', callback_data: `stats_lates_month_${prevMonth}_${prevYear}` },
+        { text: 'Наступний місяць ➡️', callback_data: `stats_lates_month_${nextMonth}_${nextYear}` }
+      ]);
+    }
+    
+    addBackButton(keyboard, telegramId, 'showLatesStatsReport');
+    await sendMessage(chatId, report, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showLatesStatsReport:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження звіту по спізненнях.');
+  }
+}
+
+// 📤 ЕКСПОРТ ДАНИХ
+async function exportMyData(chatId, telegramId) {
+  try {
+    // Перевірка доступу - тільки HR/CEO можуть експортувати дані
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Експорт даних доступний тільки для HR та CEO.');
+      return;
+    }
+    
+    // Зберігаємо попередній стан
+    navigationStack.pushState(telegramId, 'showStatsMenu', {});
+    
+    const text = `📤 <b>Експорт даних</b>
+
+Оберіть тип експорту:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '👤 По співробітнику', callback_data: 'export_employee' }
+        ],
+        [
+          { text: '🏢 По відділу', callback_data: 'export_department' }
+        ]
+      ]
+    };
+    
+    addBackButton(keyboard, telegramId, 'exportMyData');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка exportMyData:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження меню експорту.');
   }
 }
 
