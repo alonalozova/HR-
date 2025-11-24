@@ -64,6 +64,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
+const crypto = require('crypto');
 const navigationStack = require('./utils/navigation');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
@@ -402,6 +403,18 @@ async function initSheets() {
       console.log('✅ Створено вкладку: Спізнення');
     }
     
+    // 6. Пропозиції
+    if (!doc.sheetsByTitle['Пропозиції']) {
+      await doc.addSheet({
+        title: 'Пропозиції',
+        headerValues: [
+          'ID', 'Тип', 'TelegramID', 'Ім\'я та прізвище', 'Відділ',
+          'Команда', 'Повідомлення', 'Статус', 'Дата створення', 'Анонімний код'
+        ]
+      });
+      console.log('✅ Створено вкладку: Пропозиції');
+    }
+    
     // 6. Remote (залишаємо англійську назву для сумісності, але можна змінити)
     if (!doc.sheetsByTitle['Remotes']) {
       await doc.addSheet({
@@ -645,6 +658,11 @@ async function processMessage(message) {
     
     // Обробка лікарняного
     if (await handleSickProcess(chatId, telegramId, text)) {
+      return;
+    }
+    
+    // Обробка пропозицій (іменні/анонімні)
+    if (await handleSuggestionsProcess(chatId, telegramId, text)) {
       return;
     }
     
@@ -2891,6 +2909,221 @@ async function showSuggestionsMenu(chatId, telegramId) {
   } catch (error) {
     console.error('❌ Помилка showSuggestionsMenu:', error);
   }
+}
+
+// 👤 ІМЕННА ПРОПОЗИЦІЯ
+async function showNamedSuggestionsForm(chatId, telegramId) {
+  try {
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
+      return;
+    }
+    
+    navigationStack.pushState(telegramId, 'showSuggestionsMenu', {});
+    
+    registrationCache.set(telegramId, {
+      step: 'suggestion_named_message',
+      data: { type: 'named' }
+    });
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showNamedSuggestionsForm');
+    await sendMessage(chatId, `👤 <b>Іменна пропозиція</b>
+
+Ваше ім'я буде передано HR разом із пропозицією.
+
+📝 <b>Опишіть вашу ідею або пропозицію:</b>`, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showNamedSuggestionsForm:', error);
+    await sendMessage(chatId, '❌ Не вдалося відкрити форму. Спробуйте пізніше.');
+  }
+}
+
+// 🎭 АНОНІМНА ПРОПОЗИЦІЯ
+async function showAnonymousSuggestionsForm(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showSuggestionsMenu', {});
+    
+    registrationCache.set(telegramId, {
+      step: 'suggestion_anonymous_message',
+      data: { type: 'anonymous' }
+    });
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showAnonymousSuggestionsForm');
+    await sendMessage(chatId, `🎭 <b>Анонімна пропозиція</b>
+
+Ваше ім'я не буде вказано у пропозиції.
+
+📝 <b>Опишіть вашу ідею або пропозицію:</b>`, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showAnonymousSuggestionsForm:', error);
+    await sendMessage(chatId, '❌ Не вдалося відкрити форму. Спробуйте пізніше.');
+  }
+}
+
+// 📄 МОЇ ПРОПОЗИЦІЇ
+async function showMySuggestions(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showSuggestionsMenu', {});
+    
+    if (!doc) {
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        await sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше.');
+        return;
+      }
+    }
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Пропозиції'] || doc.sheetsByTitle['Suggestions'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця пропозицій недоступна.');
+      return;
+    }
+    
+    const rows = await sheet.getRows();
+    const mySuggestions = rows
+      .filter(row => row.get('TelegramID') == telegramId)
+      .sort((a, b) => new Date(b.get('Дата створення') || b.get('CreatedAt')) - new Date(a.get('Дата створення') || a.get('CreatedAt')))
+      .slice(0, 10);
+    
+    if (mySuggestions.length === 0) {
+      await sendMessage(chatId, '📭 У вас ще немає іменних пропозицій.');
+      return;
+    }
+    
+    let text = `📄 <b>Мої пропозиції</b>\n\n`;
+    mySuggestions.forEach((row, index) => {
+      const status = row.get('Статус') || row.get('Status') || 'Нова';
+      const message = row.get('Повідомлення') || row.get('Message') || '';
+      const createdAt = row.get('Дата створення') || row.get('CreatedAt');
+      text += `${index + 1}. ${status === 'Нова' ? '🆕' : status === 'В роботі' ? '⚙️' : '✅'} <b>${status}</b>\n`;
+      text += `   📝 ${message}\n`;
+      if (createdAt) {
+        text += `   📅 ${new Date(createdAt).toLocaleDateString('uk-UA')}\n`;
+      }
+      text += '\n';
+    });
+    
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showMySuggestions');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showMySuggestions:', error);
+    await sendMessage(chatId, '❌ Не вдалося завантажити ваші пропозиції.');
+  }
+}
+
+// 📝 ОБРОБКА ВВЕДЕННЯ ПРОПОЗИЦІЙ
+async function handleSuggestionsProcess(chatId, telegramId, text) {
+  try {
+    const regData = registrationCache.get(telegramId);
+    if (!regData) return false;
+    
+    if (regData.step === 'suggestion_named_message' || regData.step === 'suggestion_anonymous_message') {
+      if (!text || text.trim().length < 5) {
+        await sendMessage(chatId, '❌ Будь ласка, опишіть вашу ідею (мінімум 5 символів).');
+        return true;
+      }
+      
+      const type = regData.data?.type === 'anonymous' ? 'anonymous' : 'named';
+      const suggestionId = await saveSuggestion({
+        type,
+        telegramId: type === 'named' ? telegramId : null,
+        message: text.trim()
+      });
+      
+      registrationCache.delete(telegramId);
+      await sendMessage(chatId, `✅ <b>Дякуємо за пропозицію!</b>\n\nID: ${suggestionId}\nВаша ідея передана HR.`);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('❌ Помилка handleSuggestionsProcess:', error);
+    await sendMessage(chatId, '❌ Не вдалося зберегти пропозицію. Спробуйте пізніше.');
+    return true;
+  }
+}
+
+// 💾 ЗБЕРЕЖЕННЯ ПРОПОЗИЦІЇ
+async function saveSuggestion({ type, telegramId, message }) {
+  if (!doc) {
+    const reconnected = await initGoogleSheets();
+    if (!reconnected || !doc) {
+      throw new AppError('Google Sheets не підключено', 500, false, { scope: 'saveSuggestion' });
+    }
+  }
+  
+  await doc.loadInfo();
+  let sheet = doc.sheetsByTitle['Пропозиції'] || doc.sheetsByTitle['Suggestions'];
+  if (!sheet) {
+    sheet = await doc.addSheet({
+      title: 'Пропозиції',
+      headerValues: [
+        'ID', 'Тип', 'TelegramID', 'Ім\'я та прізвище', 'Відділ',
+        'Команда', 'Повідомлення', 'Статус', 'Дата створення', 'Анонімний код'
+      ]
+    });
+  }
+  
+  const anonymousCode = type === 'anonymous' ? generateAnonymousCode() : '';
+  const suggestionId = `SUG_${Date.now()}_${type === 'named' ? telegramId : anonymousCode}`;
+  let user = null;
+  if (type === 'named' && telegramId) {
+    user = await getUserInfo(telegramId);
+  }
+  
+  await sheet.addRow({
+    'ID': suggestionId,
+    'Тип': type === 'named' ? 'Іменна' : 'Анонімна',
+    'TelegramID': type === 'named' ? telegramId : '',
+    'Ім\'я та прізвище': user?.fullName || '',
+    'Відділ': user?.department || '',
+    'Команда': user?.team || '',
+    'Повідомлення': message,
+    'Статус': 'Нова',
+    'Дата створення': new Date().toISOString(),
+    'Анонімний код': anonymousCode
+  });
+  
+  await notifyHRAboutSuggestion({
+    suggestionId,
+    type,
+    user,
+    message,
+    anonymousCode
+  });
+  
+  return suggestionId;
+}
+
+// 🔔 СПОВІЩЕННЯ HR ПРО ПРОПОЗИЦІЮ
+async function notifyHRAboutSuggestion({ suggestionId, type, user, message, anonymousCode }) {
+  try {
+    if (!HR_CHAT_ID) return;
+    
+    let text = `💬 <b>Нова пропозиція</b>\n\n`;
+    text += `🆔 <b>ID:</b> ${suggestionId}\n`;
+    text += `📌 <b>Тип:</b> ${type === 'named' ? 'Іменна' : 'Анонімна'}\n`;
+    
+    if (type === 'named' && user) {
+      text += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
+      text += `🏢 <b>Відділ:</b> ${user.department}\n`;
+      text += `👥 <b>Команда:</b> ${user.team}\n`;
+    } else if (type === 'anonymous') {
+      text += `🕵️ <b>Анонімний код:</b> ${anonymousCode}\n`;
+    }
+    
+    text += `\n📝 <b>Ідея:</b>\n${message}`;
+    
+    await sendMessage(HR_CHAT_ID, text);
+  } catch (error) {
+    console.error('❌ Помилка notifyHRAboutSuggestion:', error);
+  }
+}
+
+function generateAnonymousCode() {
+  return `ANON-${crypto.randomBytes(4).toString('hex')}`;
 }
 
 // 🚨 МЕНЮ ASAP
