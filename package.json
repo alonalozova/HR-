@@ -23,7 +23,8 @@
     "google-spreadsheet": "^4.1.2",
     "google-auth-library": "^9.6.3",
     "dotenv": "^16.3.1",
-    "express-rate-limit": "^7.1.5"
+    "express-rate-limit": "^7.1.5",
+    "ioredis": "^5.3.2"
   },
   "engines": {
     "node": ">=18.0.0"

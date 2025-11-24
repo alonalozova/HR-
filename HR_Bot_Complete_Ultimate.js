@@ -65,6 +65,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const navigationStack = require('./utils/navigation');
+const { HybridCache } = require('./utils/cache');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
 // ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
@@ -138,62 +139,9 @@ if (!HR_CHAT_ID) {
   console.log('✅ HR_CHAT_ID налаштовано:', HR_CHAT_ID);
 }
 
-// ✅ Оптимізований кеш з TTL та лімітами розміру
-class CacheWithTTL {
-  constructor(maxSize = 1000, ttl = 5 * 60 * 1000) {
-    this.cache = new Map();
-    this.maxSize = maxSize;
-    this.ttl = ttl;
-  }
-  
-  set(key, value) {
-    // Видаляємо найстаріший елемент, якщо досягли ліміту
-    if (this.cache.size >= this.maxSize) {
-      const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
-    }
-    this.cache.set(key, {
-      data: value,
-      timestamp: Date.now()
-    });
-  }
-  
-  get(key) {
-    const item = this.cache.get(key);
-    if (!item) return null;
-    
-    // Перевіряємо TTL
-    if (Date.now() - item.timestamp > this.ttl) {
-      this.cache.delete(key);
-      return null;
-    }
-    return item.data;
-  }
-  
-  has(key) {
-    const item = this.cache.get(key);
-    if (!item) return false;
-    
-    // Перевіряємо TTL
-    if (Date.now() - item.timestamp > this.ttl) {
-      this.cache.delete(key);
-      return false;
-    }
-    return true;
-  }
-  
-  delete(key) {
-    return this.cache.delete(key);
-  }
-  
-  clear() {
-    this.cache.clear();
-  }
-  
-  size() {
-    return this.cache.size;
-  }
-}
+// ✅ Використовуємо гібридний кеш (Redis + пам'ять)
+// Якщо REDIS_URL встановлено - використовує Redis для персистентності
+// Якщо ні - працює як звичайний кеш в пам'яті
 
 // 🤖 ІНІЦІАЛІЗАЦІЯ
 const bot = new TelegramBot(BOT_TOKEN);
@@ -204,11 +152,13 @@ let doc;
 console.log('✅ AI система активна (проста база знань)');
 
 // 🛡️ ОПТИМІЗОВАНИЙ ЗАХИСТ ВІД ДУБЛЮВАННЯ
-const processedUpdates = new CacheWithTTL(1000, 2 * 60 * 1000); // 1000 запитів, 2 хвилини
+const processedUpdates = new HybridCache('processed', 1000, 2 * 60 * 1000); // 1000 запитів, 2 хвилини
 
-// 💾 ОПТИМІЗОВАНИЙ КЕШ
-const userCache = new CacheWithTTL(500, 10 * 60 * 1000); // 500 користувачів, 10 хвилин
-const registrationCache = new CacheWithTTL(100, 15 * 60 * 1000); // 100 реєстрацій, 15 хвилин
+// 💾 ОПТИМІЗОВАНИЙ КЕШ З ПІДТРИМКОЮ REDIS
+// Redis автоматично ініціалізується в конструкторі HybridCache
+// Якщо REDIS_URL не встановлено - працює як звичайний кеш в пам'яті
+const userCache = new HybridCache('users', 500, 10 * 60 * 1000); // 500 користувачів, 10 хвилин
+const registrationCache = new HybridCache('registration', 100, 15 * 60 * 1000); // 100 реєстрацій, 15 хвилин
 
 // 📊 МОНІТОРИНГ КЕШУ (кожні 10 хвилин)
 setInterval(() => {
@@ -1574,6 +1524,90 @@ async function handleRegistrationStep(chatId, telegramId, text) {
   }
 }
 
+// 📥 ІМПОРТ ДАНИХ ПРО ДАТИ ПОЧАТКУ РОБОТИ (без TelegramID)
+async function importWorkStartDates(workStartData) {
+  /**
+   * Імпортує дані про дати початку роботи без TelegramID
+   * @param {Array<{month: number, day: number, year: number, name: string}>} workStartData
+   */
+  try {
+    if (!doc) {
+      await initGoogleSheets();
+    }
+    
+    if (!doc) {
+      throw new DatabaseError('Google Sheets не підключено');
+    }
+    
+    await doc.loadInfo();
+    
+    let workStartSheet = doc.sheetsByTitle['Дати початку роботи'];
+    if (!workStartSheet) {
+      workStartSheet = await doc.addSheet({
+        title: 'Дати початку роботи',
+        headerValues: [
+          'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
+          'Перший робочий день', 'Дата додавання'
+        ]
+      });
+    }
+    
+    const existingRows = await workStartSheet.getRows();
+    let addedCount = 0;
+    let updatedCount = 0;
+    
+    for (const record of workStartData) {
+      const { month, day, year, name } = record;
+      
+      // Форматуємо дату як DD.MM.YYYY
+      const firstWorkDay = `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}.${year}`;
+      
+      // Нормалізуємо ім'я (прибираємо зайві пробіли)
+      const normalizedName = name.trim();
+      
+      // Перевіряємо, чи запис вже існує (за ім'ям та датою)
+      const existingRecord = existingRows.find(row => {
+        const rowName = (row.get('Ім\'я та прізвище') || row.get('FullName') || '').trim();
+        const rowDate = row.get('Перший робочий день') || row.get('FirstWorkDay') || '';
+        return rowName === normalizedName && rowDate === firstWorkDay;
+      });
+      
+      if (existingRecord) {
+        // Якщо запис існує, але не має TelegramID, оновлюємо інші поля
+        const currentTelegramID = existingRecord.get('TelegramID');
+        if (!currentTelegramID || currentTelegramID === '' || currentTelegramID === 'TEMP') {
+          // Оновлюємо тільки якщо TelegramID відсутній
+          existingRecord.set('Ім\'я та прізвище', normalizedName);
+          await existingRecord.save();
+          updatedCount++;
+          console.log(`🔄 Оновлено запис для ${normalizedName} (${firstWorkDay})`);
+        } else {
+          console.log(`⏭️ Запис для ${normalizedName} (${firstWorkDay}) вже має TelegramID: ${currentTelegramID}`);
+        }
+      } else {
+        // Додаємо новий запис без TelegramID
+        await workStartSheet.addRow({
+          'TelegramID': '', // Залишаємо пустим, буде заповнено при реєстрації
+          'Ім\'я та прізвище': normalizedName,
+          'Відділ': '', // Буде заповнено при реєстрації
+          'Команда': '', // Буде заповнено при реєстрації
+          'Посада': '', // Буде заповнено при реєстрації
+          'Перший робочий день': firstWorkDay,
+          'Дата додавання': new Date().toISOString()
+        });
+        addedCount++;
+        console.log(`✅ Додано запис для ${normalizedName} (${firstWorkDay})`);
+      }
+    }
+    
+    console.log(`✅ Імпорт завершено: додано ${addedCount}, оновлено ${updatedCount} записів`);
+    return { added: addedCount, updated: updatedCount };
+  } catch (error) {
+    console.error('❌ Помилка імпорту дат початку роботи:', error);
+    throw error;
+  }
+}
+
 // ✅ ЗАВЕРШЕННЯ РЕЄСТРАЦІЇ
 async function completeRegistration(chatId, telegramId, data) {
   try {
@@ -1645,7 +1679,7 @@ async function completeRegistration(chatId, telegramId, data) {
       await saveUserRole(telegramId, determinedRole, data.position, data.department);
       console.log(`✅ Визначено роль для ${telegramId}: ${determinedRole} (на основі посади: ${data.position})`);
       
-      // 2. Зберігаємо в "Дати початку роботи"
+      // 2. Зберігаємо в "Дати початку роботи" та прив'язуємо існуючі записи
       let workStartSheet = doc.sheetsByTitle['Дати початку роботи'];
       if (!workStartSheet) {
         workStartSheet = await doc.addSheet({
@@ -1657,23 +1691,46 @@ async function completeRegistration(chatId, telegramId, data) {
         });
       }
       
-      // Перевіряємо, чи запис вже існує
+      // Шукаємо існуючі записи за ім'ям та датою (без TelegramID)
       const workStartRows = await workStartSheet.getRows();
-      const existingWorkStart = workStartRows.find(row => 
-        row.get('TelegramID') == telegramId && row.get('Перший робочий день') == data.firstWorkDay
-      );
+      const existingWorkStartByName = workStartRows.find(row => {
+        const rowName = (row.get('Ім\'я та прізвище') || row.get('FullName') || '').trim();
+        const rowDate = row.get('Перший робочий день') || row.get('FirstWorkDay') || '';
+        const rowTelegramID = row.get('TelegramID');
+        // Знаходимо запис з відповідним ім'ям та датою, але без TelegramID або з порожнім
+        return rowName === fullName.trim() && 
+               rowDate === data.firstWorkDay && 
+               (!rowTelegramID || rowTelegramID === '' || rowTelegramID === 'TEMP');
+      });
       
-      if (!existingWorkStart) {
-        await workStartSheet.addRow({
-          'TelegramID': telegramId,
-          'Ім\'я та прізвище': fullName,
-          'Відділ': data.department,
-          'Команда': data.team,
-          'Посада': data.position,
-          'Перший робочий день': data.firstWorkDay,
-          'Дата додавання': new Date().toISOString()
-        });
-        console.log(`✅ Додано дату початку роботи для ${telegramId} (${fullName})`);
+      if (existingWorkStartByName) {
+        // Оновлюємо існуючий запис: додаємо TelegramID та інші дані
+        existingWorkStartByName.set('TelegramID', telegramId);
+        existingWorkStartByName.set('Ім\'я та прізвище', fullName);
+        existingWorkStartByName.set('Відділ', data.department);
+        existingWorkStartByName.set('Команда', data.team);
+        existingWorkStartByName.set('Посада', data.position);
+        await existingWorkStartByName.save();
+        console.log(`✅ Прив'язано існуючий запис дати початку роботи для ${telegramId} (${fullName})`);
+      } else {
+        // Перевіряємо, чи запис вже існує з цим TelegramID
+        const existingWorkStart = workStartRows.find(row => 
+          row.get('TelegramID') == telegramId && row.get('Перший робочий день') == data.firstWorkDay
+        );
+        
+        if (!existingWorkStart) {
+          // Додаємо новий запис
+          await workStartSheet.addRow({
+            'TelegramID': telegramId,
+            'Ім\'я та прізвище': fullName,
+            'Відділ': data.department,
+            'Команда': data.team,
+            'Посада': data.position,
+            'Перший робочий день': data.firstWorkDay,
+            'Дата додавання': new Date().toISOString()
+          });
+          console.log(`✅ Додано дату початку роботи для ${telegramId} (${fullName})`);
+        }
       }
     }
 
@@ -6100,6 +6157,7 @@ module.exports = {
   handleSickProcess,
   handleRegistrationStep,
   handleHRMailing,
+  importWorkStartDates,
   showHRDashboardStats,
   formatDate,
   isValidDate,
