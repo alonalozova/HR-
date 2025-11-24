@@ -4420,8 +4420,9 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
     // Шукаємо заявку (підтримуємо обидва формати назв колонок)
     const rows = await sheet.getRows();
     const requestRow = rows.find(row => {
-      const rowId = row.get('ID заявки') || row.get('RequestID');
-      return rowId === requestId || String(rowId) === String(requestId);
+      const rawId = row.get('ID заявки') || row.get('RequestID') || '';
+      const normalizedId = typeof rawId === 'string' ? rawId.trim() : String(rawId).trim();
+      return normalizedId === requestId.trim();
     });
     
     if (!requestRow) {
@@ -4454,19 +4455,21 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
     await requestRow.save();
     
     // Отримуємо дані заявки (підтримуємо обидва формати назв колонок)
+    const getValue = (row, uaKey, enKey) => {
+      const value = isUkrainianSheet ? row.get(uaKey) : row.get(enKey);
+      if (value === undefined || value === null || value === '') {
+        const fallback = isUkrainianSheet ? row.get(enKey) : row.get(uaKey);
+        return fallback;
+      }
+      return value;
+    };
+    
     const userTelegramId = parseInt(requestRow.get('TelegramID'));
-    const userFullName = isUkrainianSheet 
-      ? (requestRow.get('Ім\'я та прізвище') || requestRow.get('FullName'))
-      : requestRow.get('FullName');
-    const startDate = isUkrainianSheet 
-      ? (requestRow.get('Дата початку') || requestRow.get('StartDate'))
-      : requestRow.get('StartDate');
-    const endDate = isUkrainianSheet 
-      ? (requestRow.get('Дата закінчення') || requestRow.get('EndDate'))
-      : requestRow.get('EndDate');
-    const days = parseInt(isUkrainianSheet 
-      ? (requestRow.get('Кількість днів') || requestRow.get('Days'))
-      : requestRow.get('Days'));
+    const userFullName = getValue(requestRow, 'Ім\'я та прізвище', 'FullName');
+    const startDate = getValue(requestRow, 'Дата початку', 'StartDate');
+    const endDate = getValue(requestRow, 'Дата закінчення', 'EndDate');
+    const daysRaw = getValue(requestRow, 'Кількість днів', 'Days');
+    const days = parseInt(daysRaw);
     
     // Повідомляємо HR про успіх
     const hrMessage = approved 
