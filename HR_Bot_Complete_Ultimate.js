@@ -706,7 +706,7 @@ async function processCallback(callbackQuery) {
       'vacation_requests': () => showMyVacationRequests(chatId, telegramId),
       'vacation_emergency': () => showEmergencyVacationForm(chatId, telegramId),
       'remote_today': () => setRemoteToday(chatId, telegramId),
-      'remote_calendar': () => showRemoteCalendar(chatId, telegramId),
+      'remote_custom': () => showRemoteCustomDate(chatId, telegramId),
       'remote_stats': () => showRemoteStats(chatId, telegramId),
       'late_report': () => reportLate(chatId, telegramId),
       'late_stats': () => showLateStats(chatId, telegramId),
@@ -2020,7 +2020,7 @@ async function showRemoteMenu(chatId, telegramId) {
       inline_keyboard: [
         [
           { text: '🏠 Remote сьогодні', callback_data: 'remote_today' },
-          { text: '📅 Календар Remote', callback_data: 'remote_calendar' }
+          { text: '📅 Remote на іншу дату', callback_data: 'remote_custom' }
         ],
         [
           { text: '📊 Статистика', callback_data: 'remote_stats' }
@@ -5697,7 +5697,31 @@ async function handleRemoteProcess(chatId, telegramId, text) {
 
 async function setRemoteToday(chatId, telegramId) {
   try {
-    // Зберігаємо попередній стан (меню remote)
+    const user = await getUserInfo(telegramId);
+    if (!user) {
+      await sendMessage(chatId, '❌ Користувач не знайдений.');
+      return;
+    }
+    
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    if (now.getHours() >= 19) {
+      await sendMessage(chatId, '⚠️ Після 19:00 неможливо подати заявку на Remote на завтра. Використайте варіант "Remote на іншу дату".');
+      return;
+    }
+    
+    await processRemoteRequest(chatId, telegramId, { date: tomorrow });
+    await sendMessage(chatId, `✅ Запит на Remote подано на ${formatDate(tomorrow)}.\n\nДля інших дат скористайтесь кнопкою "Remote на іншу дату".`);
+  } catch (error) {
+    console.error('❌ Помилка setRemoteToday:', error);
+  }
+}
+
+async function showRemoteCustomDate(chatId, telegramId) {
+  try {
     navigationStack.pushState(telegramId, 'showRemoteMenu', {});
     
     const user = await getUserInfo(telegramId);
@@ -5708,13 +5732,13 @@ async function setRemoteToday(chatId, telegramId) {
     
     registrationCache.set(telegramId, {
       step: 'remote_date',
-      data: { type: 'today' }
+      data: { type: 'custom' }
     });
     
-    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'setRemoteToday');
+    const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showRemoteCustomDate');
     await sendMessage(chatId, '🏠 <b>Remote робота</b>\n\n📅 <b>Вкажіть дату Remote роботи</b> (ДД.ММ.РРРР):\n\n⚠️ Повідомлення має бути до 19:00 дня передуючого залишенню вдома.', keyboard);
   } catch (error) {
-    console.error('❌ Помилка setRemoteToday:', error);
+    console.error('❌ Помилка showRemoteCustomDate:', error);
   }
 }
 
