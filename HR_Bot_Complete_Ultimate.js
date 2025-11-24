@@ -306,8 +306,8 @@ async function executeWithRetryAndMonitor(fn, operationName, options = {}) {
 const DEPARTMENTS = {
   'Marketing': {
     'PPC': ['PPC', 'PM PPC'],
-    'Target/Kris team': ['Team lead', 'PM target', 'Target specialist'],
-    'Target/Lera team': ['Team lead', 'PM target', 'Target specialist']
+    'Target/Kris team': ['PM target', 'Target specialist', 'Team lead'],
+    'Target/Lera team': ['PM target', 'Target specialist', 'Team lead']
   },
   'Design': {
     'Head of Design': ['Head of Design'],
