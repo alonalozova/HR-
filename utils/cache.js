@@ -73,6 +73,11 @@ class HybridCache {
     this.initRedis();
   }
 
+  _normalizeKey(key) {
+    if (key === undefined || key === null) return '';
+    return key.toString();
+  }
+
   initRedis() {
     // Асинхронна ініціалізація Redis (неблокуюча)
     (async () => {
@@ -118,29 +123,32 @@ class HybridCache {
 
   // Синхронний метод set з асинхронним fallback
   set(key, value) {
+    const normalizedKey = this._normalizeKey(key);
+
     if (this.useRedis && this.redis && this.redis.status === 'ready') {
       // Використовуємо Redis асинхронно, але не блокуємо
-      const fullKey = `${this.prefix}:${key}`;
+      const fullKey = `${this.prefix}:${normalizedKey}`;
       const ttlSeconds = Math.floor(this.ttl / 1000);
       this.redis.setex(fullKey, ttlSeconds, JSON.stringify({
         data: value,
         timestamp: Date.now()
       })).catch(() => {
         // Якщо Redis не працює, зберігаємо в пам'ять
-        this.memoryCache.set(key, value);
+        this.memoryCache.set(normalizedKey, value);
       });
       // Також зберігаємо в пам'ять для швидкого доступу
-      this.memoryCache.set(key, value);
+      this.memoryCache.set(normalizedKey, value);
     } else {
       // Використовуємо пам'ять
-      this.memoryCache.set(key, value);
+      this.memoryCache.set(normalizedKey, value);
     }
   }
 
   // Синхронний метод get
   get(key) {
+    const normalizedKey = this._normalizeKey(key);
     // Спочатку перевіряємо пам'ять (швидше)
-    const memoryValue = this.memoryCache.get(key);
+    const memoryValue = this.memoryCache.get(normalizedKey);
     if (memoryValue !== null) {
       return memoryValue;
     }
@@ -153,19 +161,21 @@ class HybridCache {
 
   // Синхронний метод has
   has(key) {
-    return this.memoryCache.has(key);
+    const normalizedKey = this._normalizeKey(key);
+    return this.memoryCache.has(normalizedKey);
   }
 
   // Синхронний метод delete
   delete(key) {
+    const normalizedKey = this._normalizeKey(key);
     if (this.useRedis && this.redis && this.redis.status === 'ready') {
-      const fullKey = `${this.prefix}:${key}`;
+      const fullKey = `${this.prefix}:${normalizedKey}`;
       this.redis.del(fullKey).catch(() => {
         // Якщо Redis не працює, видаляємо з пам'яті
-        this.memoryCache.delete(key);
+        this.memoryCache.delete(normalizedKey);
       });
     }
-    return this.memoryCache.delete(key);
+    return this.memoryCache.delete(normalizedKey);
   }
 
   clear() {
@@ -190,8 +200,9 @@ class HybridCache {
 
   // Асинхронний метод для отримання з Redis (якщо потрібно)
   async getAsync(key) {
+    const normalizedKey = this._normalizeKey(key);
     // Спочатку перевіряємо пам'ять
-    const memoryValue = this.memoryCache.get(key);
+    const memoryValue = this.memoryCache.get(normalizedKey);
     if (memoryValue !== null) {
       return memoryValue;
     }
@@ -199,13 +210,13 @@ class HybridCache {
     // Якщо в пам'яті немає і Redis доступний, пробуємо отримати з Redis
     if (this.useRedis && this.redis && this.redis.status === 'ready') {
       try {
-        const fullKey = `${this.prefix}:${key}`;
+        const fullKey = `${this.prefix}:${normalizedKey}`;
         const data = await this.redis.get(fullKey);
         if (data) {
           const parsed = JSON.parse(data);
           const value = parsed.data;
           // Зберігаємо в пам'ять для наступного разу
-          this.memoryCache.set(key, value);
+          this.memoryCache.set(normalizedKey, value);
           return value;
         }
       } catch (error) {

@@ -147,6 +147,7 @@ if (!HR_CHAT_ID) {
 const bot = new TelegramBot(BOT_TOKEN);
 const app = express();
 let doc;
+let BOT_USERNAME = null; // Буде заповнено при ініціалізації
 
 // 🧠 AI Система (проста, але працює)
 console.log('✅ AI система активна (проста база знань)');
@@ -159,10 +160,13 @@ const processedUpdates = new HybridCache('processed', 1000, 2 * 60 * 1000); // 1
 // Якщо REDIS_URL не встановлено - працює як звичайний кеш в пам'яті
 const userCache = new HybridCache('users', 500, 10 * 60 * 1000); // 500 користувачів, 10 хвилин
 const registrationCache = new HybridCache('registration', 100, 15 * 60 * 1000); // 100 реєстрацій, 15 хвилин
+// Тимчасовий кеш для збережених заявок (для швидкого пошуку до синхронізації Google Sheets)
+const vacationRequestsCache = new HybridCache('vacation_requests', 200, 5 * 60 * 1000); // 200 заявок, 5 хвилин
 
-// 📊 МОНІТОРИНГ КЕШУ (кожні 10 хвилин)
+// 📊 МОНІТОРИНГ КЕШУ ТА ЧЕРГИ (кожні 10 хвилин)
 setInterval(() => {
-  console.log(`📊 Кеш статистика: userCache=${userCache.size()}, registrationCache=${registrationCache.size()}, processedUpdates=${processedUpdates.size()}`);
+  console.log(`📊 Кеш статистика: userCache=${userCache.size()}, registrationCache=${registrationCache.size()}, processedUpdates=${processedUpdates.size()}, vacationRequestsCache=${vacationRequestsCache.size()}`);
+  console.log(`🚦 Черга запитів: активні=${sheetsQueue.getRunningCount()}, в черзі=${sheetsQueue.getQueueLength()}`);
 }, 10 * 60 * 1000);
 
 // 🔄 RETRY ЛОГІКА ДЛЯ GOOGLE SHEETS
@@ -251,6 +255,236 @@ async function executeWithRetryAndMonitor(fn, operationName, options = {}) {
     context
   );
 }
+
+// 🚦 ЧЕРГА ЗАПИТІВ ДЛЯ ЗАПОБІГАННЯ RATE LIMIT
+/**
+ * Черга для обмеження одночасних запитів до Google Sheets API
+ * Запобігає перевищенню rate limits та покращує стабільність
+ */
+class RequestQueue {
+  constructor(maxConcurrent = 3, delayBetweenRequests = 100) {
+    this.queue = [];
+    this.running = 0;
+    this.maxConcurrent = maxConcurrent;
+    this.delayBetweenRequests = delayBetweenRequests;
+  }
+
+  /**
+   * Додає функцію до черги
+   * @param {Function} fn - Асинхронна функція для виконання
+   * @returns {Promise<any>} Результат виконання функції
+   */
+  async add(fn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ fn, resolve, reject });
+      this.process();
+    });
+  }
+
+  /**
+   * Обробляє чергу запитів
+   * @private
+   */
+  async process() {
+    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+    
+    this.running++;
+    const { fn, resolve, reject } = this.queue.shift();
+    
+    try {
+      const result = await fn();
+      resolve(result);
+    } catch (error) {
+      reject(error);
+    } finally {
+      this.running--;
+      
+      // Затримка перед наступним запитом
+      if (this.queue.length > 0) {
+        await new Promise(r => setTimeout(r, this.delayBetweenRequests));
+      }
+      
+      this.process();
+    }
+  }
+
+  /**
+   * Отримує поточну кількість активних запитів
+   * @returns {number}
+   */
+  getRunningCount() {
+    return this.running;
+  }
+
+  /**
+   * Отримує кількість запитів в черзі
+   * @returns {number}
+   */
+  getQueueLength() {
+    return this.queue.length;
+  }
+}
+
+// Створюємо глобальну чергу для Google Sheets операцій
+const sheetsQueue = new RequestQueue(3, 100); // Максимум 3 одночасні запити, затримка 100мс
+
+// 🔍 ІНДЕКС КОРИСТУВАЧІВ ДЛЯ ШВИДКОГО ПОШУКУ
+/**
+ * Індекс для швидкого пошуку користувачів за іменем
+ * Використовується для inline query пошуку
+ */
+class UserIndex {
+  constructor() {
+    this.byTelegramId = new Map();
+    this.byName = new Map();
+    this.lastUpdate = null;
+  }
+
+  /**
+   * Додає або оновлює користувача в індексі
+   * @param {User} user - Об'єкт користувача
+   */
+  add(user) {
+    if (!user || !user.telegramId || !user.fullName) return;
+    
+    this.byTelegramId.set(user.telegramId.toString(), user);
+    
+    // Індексуємо по імені (нижній регістр для пошуку)
+    const nameKey = user.fullName.toLowerCase();
+    if (!this.byName.has(nameKey)) {
+      this.byName.set(nameKey, []);
+    }
+    const nameList = this.byName.get(nameKey);
+    if (!nameList.find(u => u.telegramId === user.telegramId)) {
+      nameList.push(user);
+    }
+    
+    this.lastUpdate = Date.now();
+  }
+
+  /**
+   * Видаляє користувача з індексу
+   * @param {number|string} telegramId - Telegram ID
+   */
+  remove(telegramId) {
+    const id = telegramId.toString();
+    const user = this.byTelegramId.get(id);
+    if (user) {
+      this.byTelegramId.delete(id);
+      const nameKey = user.fullName.toLowerCase();
+      const nameList = this.byName.get(nameKey);
+      if (nameList) {
+        const index = nameList.findIndex(u => u.telegramId === user.telegramId);
+        if (index !== -1) {
+          nameList.splice(index, 1);
+          if (nameList.length === 0) {
+            this.byName.delete(nameKey);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Шукає користувачів за терміном пошуку
+   * @param {string} term - Термін пошуку
+   * @returns {Array<User>} Масив користувачів, відсортований за релевантністю
+   */
+  search(term) {
+    if (!term || term.length < 2) return [];
+    
+    const results = [];
+    const lowerTerm = term.toLowerCase().trim();
+    
+    for (const user of this.byTelegramId.values()) {
+      const score = this.calculateScore(user, lowerTerm);
+      if (score > 0) {
+        results.push({ ...user, score });
+      }
+    }
+    
+    return results.sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Обчислює релевантність користувача для пошукового терміну
+   * @param {User} user - Об'єкт користувача
+   * @param {string} term - Термін пошуку (вже в нижньому регістрі)
+   * @returns {number} Score релевантності (0 = не підходить)
+   */
+  calculateScore(user, term) {
+    if (!user.fullName) return 0;
+    
+    let score = 0;
+    const fullName = user.fullName.toLowerCase();
+    
+    // Точний збіг - найвищий score
+    if (fullName === term) {
+      score += 100;
+    }
+    
+    // Початок імені
+    if (fullName.startsWith(term)) {
+      score += 50;
+    }
+    
+    // Містить термін
+    if (fullName.includes(term)) {
+      score += 25;
+    }
+    
+    // Fuzzy match (приблизний збіг по словах)
+    const words = fullName.split(/\s+/);
+    for (const word of words) {
+      if (word.startsWith(term)) {
+        score += 10;
+      } else if (word.includes(term)) {
+        score += 5;
+      }
+    }
+    
+    // Бонус за відділ/команду, якщо вони містять термін
+    if (user.department && user.department.toLowerCase().includes(term)) {
+      score += 3;
+    }
+    if (user.team && user.team.toLowerCase().includes(term)) {
+      score += 3;
+    }
+    
+    return score;
+  }
+
+  /**
+   * Очищає індекс
+   */
+  clear() {
+    this.byTelegramId.clear();
+    this.byName.clear();
+    this.lastUpdate = null;
+  }
+
+  /**
+   * Отримує кількість користувачів в індексі
+   * @returns {number}
+   */
+  size() {
+    return this.byTelegramId.size;
+  }
+
+  /**
+   * Отримує користувача за Telegram ID
+   * @param {number|string} telegramId - Telegram ID
+   * @returns {User|null}
+   */
+  get(telegramId) {
+    return this.byTelegramId.get(telegramId.toString()) || null;
+  }
+}
+
+// Створюємо глобальний індекс користувачів
+const userIndex = new UserIndex();
 
 // 🏗️ СТРУКТУРА КОМАНДИ
 const DEPARTMENTS = {
@@ -480,8 +714,17 @@ app.post('/webhook', async (req, res) => {
     // Додаємо в кеш (використовуємо set, а не add!)
     processedUpdates.set(updateIdStr, true);
     
-    // Обробка повідомлення (асинхронно, неблокуюче)
-    if (update.message) {
+    // Обробка inline query (асинхронно, неблокуюче)
+    if (update.inline_query) {
+      const inlineQuery = update.inline_query;
+      console.log('🔍 Обробка inline query від:', inlineQuery.from?.id, 'запит:', inlineQuery.query?.substring(0, 50));
+      
+      // Обробляємо асинхронно, неблокуюче
+      handleInlineQuery(inlineQuery).catch(error => {
+        console.error('❌ Помилка обробки inline query:', error);
+        console.error('❌ Stack:', error.stack);
+      });
+    } else if (update.message) {
       const message = update.message;
       console.log('📝 Обробка повідомлення від:', message.from?.id, 'текст:', message.text?.substring(0, 50));
       
@@ -638,9 +881,11 @@ async function processCallback(callbackQuery) {
       'vacation_requests': () => showMyVacationRequests(chatId, telegramId),
       'vacation_emergency': () => showEmergencyVacationForm(chatId, telegramId),
       'remote_today': () => setRemoteToday(chatId, telegramId),
+      'quick_remote_today': () => setRemoteToday(chatId, telegramId),
       'remote_calendar': () => showRemoteCalendar(chatId, telegramId),
       'remote_stats': () => showRemoteStats(chatId, telegramId),
       'late_report': () => reportLate(chatId, telegramId),
+      'quick_late_today': () => handleLateToday(chatId, telegramId),
       'late_stats': () => showLateStats(chatId, telegramId),
       'late_today': () => handleLateToday(chatId, telegramId),
       'late_other_date': () => handleLateOtherDate(chatId, telegramId),
@@ -650,6 +895,8 @@ async function processCallback(callbackQuery) {
       'sick_stats': () => showSickStats(chatId, telegramId),
       'stats_monthly': () => showMonthlyStats(chatId, telegramId),
       'stats_export': () => exportMyData(chatId, telegramId),
+      'quick_review_requests': () => showApprovalsMenu(chatId, telegramId),
+      'quick_approve_requests': () => showApprovalsMenu(chatId, telegramId),
       'export_employee': async () => {
         const role = await getUserRole(telegramId);
         if (role === 'HR') {
@@ -697,6 +944,7 @@ async function processCallback(callbackQuery) {
       'hr_mailings': () => showMailingsMenu(chatId, telegramId),
       'hr_export': () => showHRExportMenu(chatId, telegramId),
       'hr_export_employee': () => showHRExportEmployee(chatId, telegramId),
+      'hr_export_employee_list': () => showHRExportEmployeeList(chatId, telegramId),
       'hr_export_department': () => showHRExportDepartment(chatId, telegramId),
       'ceo_export': () => showCEOExportMenu(chatId, telegramId),
       'ceo_export_employee': () => showCEOExportEmployee(chatId, telegramId),
@@ -828,6 +1076,12 @@ async function processCallback(callbackQuery) {
         const year = parseInt(parts[1]);
         await showLatesStatsReport(chatId, telegramId, null, month, year);
       }
+    } else if (data.startsWith('vacation_requests_page_')) {
+      // Обробка пагінації для списку заявок на відпустку
+      const page = parseInt(data.replace('vacation_requests_page_', ''));
+      if (!isNaN(page) && page >= 0) {
+        await showMyVacationRequests(chatId, telegramId, page);
+      }
     } else if (data === 'emergency_vacation_confirm_yes') {
       const regData = registrationCache.get(telegramId);
       if (regData && regData.step === 'emergency_vacation_confirm_past_date') {
@@ -899,6 +1153,33 @@ async function sendMessage(chatId, text, keyboard = null) {
   }
 }
 
+function mapRowToUserData(row, sheetTitle) {
+  if (!row) return null;
+  
+  const rawTelegramId = row.get('TelegramID');
+  if (!rawTelegramId) return null;
+
+  const parsedTelegramId = parseInt(rawTelegramId, 10);
+  const normalizedTelegramId = Number.isNaN(parsedTelegramId)
+    ? rawTelegramId.toString()
+    : parsedTelegramId;
+
+  const isUkrainianSheet = sheetTitle === 'Працівники';
+  const getValue = (uaKey, enKey) => row.get(isUkrainianSheet ? uaKey : enKey) || row.get(enKey) || row.get(uaKey) || '';
+
+  return {
+    telegramId: normalizedTelegramId,
+    fullName: getValue('Ім\'я та прізвище', 'FullName'),
+    department: getValue('Відділ', 'Department'),
+    team: getValue('Команда', 'Team'),
+    position: getValue('Посада', 'Position'),
+    birthDate: getValue('Дата народження', 'BirthDate'),
+    firstWorkDay: getValue('Перший робочий день', 'FirstWorkDay'),
+    workMode: getValue('Режим роботи', 'WorkMode') || 'Hybrid',
+    pm: row.get('PM') || null
+  };
+}
+
 // 👤 ОТРИМАННЯ КОРИСТУВАЧА
 /**
  * Отримує інформацію про користувача з бази даних або кешу
@@ -919,64 +1200,66 @@ async function getUserInfo(telegramId) {
       return null;
     }
     
+    // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
+    const result = await sheetsQueue.add(async () => {
     await doc.loadInfo();
-    // Спробуємо спочатку українську назву, потім англійську для сумісності
-    const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
-    if (!sheet) {
-      console.warn(`⚠️ Лист Працівники/Employees не знайдено для користувача ${telegramId}`);
-      return null;
-    }
-    
-    const rows = await sheet.getRows();
-    console.log(`🔍 Шукаємо користувача ${telegramId} в ${rows.length} рядках`);
-    
-    // Перевіряємо як число та як рядок для надійності
-    const user = rows.find(row => {
-      const rowTelegramID = row.get('TelegramID');
-      const matches = rowTelegramID == telegramId || 
-             parseInt(rowTelegramID) === parseInt(telegramId) ||
-             String(rowTelegramID) === String(telegramId);
-      if (matches) {
-        console.log(`✅ Знайдено збіг: rowTelegramID=${rowTelegramID}, telegramId=${telegramId}`);
+      // Спробуємо спочатку українську назву, потім англійську для сумісності
+      const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+      if (!sheet) {
+        console.warn(`⚠️ Лист Працівники/Employees не знайдено для користувача ${telegramId}`);
+        return null;
       }
-      return matches;
+      
+      const PAGE_SIZE = 500;
+      let offset = 0;
+      let batchIndex = 0;
+      
+      while (true) {
+        const rows = await sheet.getRows({
+          offset,
+          limit: PAGE_SIZE
+        });
+        
+        if (rows.length === 0) break;
+        console.log(`🔍 Пошук користувача ${telegramId}: партія ${batchIndex + 1}, рядків=${rows.length}`);
+        
+        // Перевіряємо як число та як рядок для надійності
+        const user = rows.find(row => {
+          const rowTelegramID = row.get('TelegramID');
+          const matches = rowTelegramID == telegramId || 
+                 parseInt(rowTelegramID) === parseInt(telegramId) ||
+                 String(rowTelegramID) === String(telegramId);
+          if (matches) {
+            console.log(`✅ Знайдено збіг: rowTelegramID=${rowTelegramID}, telegramId=${telegramId}`);
+          }
+          return matches;
+        });
+        
+        if (user) {
+          const userData = mapRowToUserData(user, sheet.title);
+          if (userData) {
+            // Зберігаємо дані в кеш (HybridCache сам додає timestamp)
+            userCache.set(telegramId, userData);
+            // Додаємо в індекс для швидкого пошуку
+            userIndex.add(userData);
+            console.log(`✅ Користувач ${telegramId} (${userData.fullName}) завантажено з Google Sheets та додано в кеш`);
+      return userData;
+          }
+        }
+        
+        offset += rows.length;
+        batchIndex++;
+        
+        if (rows.length < PAGE_SIZE) {
+          break;
+        }
+      }
+      
+      return null;
     });
     
-    if (user) {
-      // Визначаємо, яка таблиця використовується (українська чи англійська)
-      const isUkrainianSheet = sheet.title === 'Працівники';
-      
-      const userData = {
-        telegramId: parseInt(user.get('TelegramID')),
-        fullName: user.get(isUkrainianSheet ? 'Ім\'я та прізвище' : 'FullName') || 
-                  user.get('FullName') || 
-                  user.get('Ім\'я та прізвище'),
-        department: user.get(isUkrainianSheet ? 'Відділ' : 'Department') || 
-                    user.get('Department') || 
-                    user.get('Відділ'),
-        team: user.get(isUkrainianSheet ? 'Команда' : 'Team') || 
-              user.get('Team') || 
-              user.get('Команда'),
-        position: user.get(isUkrainianSheet ? 'Посада' : 'Position') || 
-                  user.get('Position') || 
-                  user.get('Посада'),
-        birthDate: user.get(isUkrainianSheet ? 'Дата народження' : 'BirthDate') || 
-                   user.get('BirthDate') || 
-                   user.get('Дата народження'),
-        firstWorkDay: user.get(isUkrainianSheet ? 'Перший робочий день' : 'FirstWorkDay') || 
-                      user.get('FirstWorkDay') || 
-                      user.get('Перший робочий день'),
-        workMode: user.get(isUkrainianSheet ? 'Режим роботи' : 'WorkMode') || 
-                  user.get('WorkMode') || 
-                  user.get('Режим роботи') || 
-                  'Hybrid',
-        pm: user.get('PM') || null
-      };
-      
-      // Зберігаємо дані в кеш (CacheWithTTL сам додає timestamp)
-      userCache.set(telegramId, userData);
-      console.log(`✅ Користувач ${telegramId} (${userData.fullName}) завантажено з Google Sheets та додано в кеш`);
-      return userData;
+    if (result) {
+      return result;
     }
     
     console.warn(`⚠️ Користувач ${telegramId} не знайдено в Google Sheets`);
@@ -985,6 +1268,105 @@ async function getUserInfo(telegramId) {
     console.error(`❌ Помилка getUserInfo для користувача ${telegramId}:`, error);
     console.error('❌ Stack:', error.stack);
     return null;
+  }
+}
+
+/**
+ * Отримує інформацію про декількох користувачів однією операцією
+ * @param {Array<number|string>} telegramIds - Список Telegram ID
+ * @returns {Promise<Record<string, User>>}
+ */
+async function getUsersInfoBatch(telegramIds = []) {
+  try {
+    if (!Array.isArray(telegramIds) || telegramIds.length === 0) {
+      return {};
+    }
+
+    const normalizedIds = Array.from(new Set(
+      telegramIds
+        .filter(id => id !== undefined && id !== null && id !== '')
+        .map(id => id.toString())
+    ));
+
+    if (normalizedIds.length === 0) {
+      return {};
+    }
+
+    const result = {};
+    const missingIds = [];
+
+    for (const id of normalizedIds) {
+      const cachedUser = await userCache.getAsync(id);
+      if (cachedUser) {
+        result[id] = cachedUser;
+      } else {
+        missingIds.push(id);
+      }
+    }
+
+    if (missingIds.length === 0) {
+      return result;
+    }
+
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено для getUsersInfoBatch');
+      return result;
+    }
+
+    // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
+    await sheetsQueue.add(async () => {
+      await doc.loadInfo();
+      const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+      if (!sheet) {
+        console.warn('⚠️ Таблиця Працівники/Employees не знайдена для batch-завантаження');
+        return;
+      }
+
+      const PAGE_SIZE = 500;
+      const missingSet = new Set(missingIds);
+      let offset = 0;
+
+      while (missingSet.size > 0) {
+        const rows = await sheet.getRows({
+          offset,
+          limit: PAGE_SIZE
+        });
+
+        if (rows.length === 0) break;
+
+        for (const row of rows) {
+          if (missingSet.size === 0) break;
+
+          const rowTelegramId = row.get('TelegramID');
+          if (!rowTelegramId) continue;
+
+          const normalizedRowId = rowTelegramId.toString();
+          if (!missingSet.has(normalizedRowId)) continue;
+
+          const userData = mapRowToUserData(row, sheet.title);
+          if (userData) {
+            result[normalizedRowId] = userData;
+            userCache.set(normalizedRowId, userData);
+            // Додаємо в індекс для швидкого пошуку
+            userIndex.add(userData);
+          }
+
+          missingSet.delete(normalizedRowId);
+        }
+
+        offset += rows.length;
+        if (rows.length < PAGE_SIZE) break;
+      }
+
+      if (missingSet.size > 0) {
+        console.warn(`⚠️ Не вдалося знайти ${missingSet.size} користувачів у batch-запиті`);
+      }
+    });
+
+    return result;
+  } catch (error) {
+    console.error('❌ Помилка getUsersInfoBatch:', error);
+    return {};
   }
 }
 
@@ -1171,77 +1553,397 @@ async function getPMForUser(user) {
   }
 }
 
-// 🏠 ГОЛОВНЕ МЕНЮ
+// 📊 ДОПОМІЖНІ ФУНКЦІЇ ДЛЯ БЕЙДЖІВ МЕНЮ
+/**
+ * Отримує кількість термінових заявок для HR
+ */
+async function getUrgentRequestsCount() {
+  try {
+    if (!doc) return 0;
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+    if (!sheet) return 0;
+    
+    const rows = await sheet.getRows();
+    const pendingCount = rows.filter(row => {
+      const status = row.get('Status') || row.get('Статус');
+      return status === 'pending_hr' || status === 'pending_pm';
+    }).length;
+    
+    return pendingCount;
+  } catch (error) {
+    console.error('❌ Помилка getUrgentRequestsCount:', error);
+    return 0;
+  }
+}
+
+/**
+ * Отримує кількість критичних алертів для CEO
+ */
+async function getCriticalAlertsCount() {
+  try {
+    if (!doc) return 0;
+    
+    await doc.loadInfo();
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    // Критичні спізнення (>7 за місяць)
+    const latesSheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
+    if (!latesSheet) return 0;
+    
+    const latesRows = await latesSheet.getRows();
+    const monthLates = latesRows.filter(row => {
+      const dateStr = row.get('Date') || row.get('Дата');
+      if (!dateStr) return false;
+      const date = new Date(dateStr);
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+    
+    // Групуємо по користувачах
+    const userLatesCount = new Map();
+    monthLates.forEach(row => {
+      const userId = row.get('TelegramID');
+      userLatesCount.set(userId, (userLatesCount.get(userId) || 0) + 1);
+    });
+    
+    // Рахуємо користувачів з >7 спізнень
+    let criticalCount = 0;
+    userLatesCount.forEach(count => {
+      if (count > 7) criticalCount++;
+    });
+    
+    return criticalCount;
+  } catch (error) {
+    console.error('❌ Помилка getCriticalAlertsCount:', error);
+    return 0;
+  }
+}
+
+/**
+ * Отримує кількість заявок на затвердження для PM
+ */
+async function getPendingApprovalsCount(telegramId) {
+  try {
+    if (!doc) return 0;
+    
+    const user = await getUserInfo(telegramId);
+    if (!user || !user.team) return 0;
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+    if (!sheet) return 0;
+    
+    const rows = await sheet.getRows();
+    const pendingCount = rows.filter(row => {
+      const status = row.get('Status') || row.get('Статус');
+      const rowTeam = row.get('Team') || row.get('Команда');
+      return status === 'pending_pm' && rowTeam === user.team;
+    }).length;
+    
+    return pendingCount;
+  } catch (error) {
+    console.error('❌ Помилка getPendingApprovalsCount:', error);
+    return 0;
+  }
+}
+
+/**
+ * Перевіряє, чи користувач вже відмітив remote сьогодні
+ */
+async function checkRemoteToday(telegramId) {
+  try {
+    if (!doc) return false;
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Remotes'];
+    if (!sheet) return false;
+    
+    const rows = await sheet.getRows();
+    const todayStr = new Date().toISOString().split('T')[0];
+    
+    return rows.some(row => {
+      const rowTelegramId = row.get('TelegramID');
+      const rowDate = row.get('Date');
+      if (!rowTelegramId || !rowDate) return false;
+      const normalizedDate = new Date(rowDate).toISOString().split('T')[0];
+      return rowTelegramId == telegramId && normalizedDate === todayStr;
+    });
+  } catch (error) {
+    console.error('❌ Помилка checkRemoteToday:', error);
+    return false;
+  }
+}
+
+/**
+ * Перевіряє, чи користувач вже повідомив про спізнення сьогодні
+ */
+async function checkLateToday(telegramId) {
+  try {
+    if (!doc) return false;
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
+    if (!sheet) return false;
+    
+    const rows = await sheet.getRows();
+    const todayStr = new Date().toISOString().split('T')[0];
+    
+    return rows.some(row => {
+      const rowTelegramId = row.get('TelegramID');
+      const rowDate = row.get('Date') || row.get('Дата');
+      if (!rowTelegramId || !rowDate) return false;
+      const normalizedDate = new Date(rowDate).toISOString().split('T')[0];
+      return rowTelegramId == telegramId && normalizedDate === todayStr;
+    });
+  } catch (error) {
+    console.error('❌ Помилка checkLateToday:', error);
+    return false;
+  }
+}
+
+/**
+ * Отримує останню активність користувача (плейсхолдер, для майбутніх сценаріїв)
+ */
+async function getRecentActivity(telegramId) {
+  try {
+    // TODO: Реалізувати детальний аналіз активності (з логів/таблиць)
+    return {
+      lastAction: null,
+      lastActionDate: null
+    };
+  } catch (error) {
+    console.error('❌ Помилка getRecentActivity:', error);
+    return {
+      lastAction: null,
+      lastActionDate: null
+    };
+  }
+}
+
+/**
+ * Показує контекстні швидкі дії (inline кнопки)
+ */
+async function showContextualQuickActions(chatId, telegramId) {
+  try {
+    const [role, user, recentActivity] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(telegramId),
+      getRecentActivity(telegramId)
+    ]);
+    
+    if (!user) return;
+    
+    const quickActions = [];
+    const today = new Date();
+    
+    // Якщо сьогодні понеділок і ще не повідомив про remote
+    if (today.getDay() === 1) {
+      const remoteToday = await checkRemoteToday(telegramId);
+      if (!remoteToday) {
+        quickActions.push({
+          text: '⚡ Remote сьогодні',
+          callback_data: 'quick_remote_today',
+          priority: 10
+        });
+      }
+    }
+    
+    // Якщо пізно прийшов (після 10:21) і ще не повідомив про спізнення
+    const currentHour = today.getHours();
+    const currentMinute = today.getMinutes();
+    if (currentHour > 10 || (currentHour === 10 && currentMinute > 21)) {
+      const lateToday = await checkLateToday(telegramId);
+      if (!lateToday) {
+        quickActions.push({
+          text: '⚡ Спізнення сьогодні',
+          callback_data: 'quick_late_today',
+          priority: 15
+        });
+      }
+    }
+    
+    // Для HR: якщо є незатверджені заявки
+    if (role === 'HR') {
+      const pendingCount = await getUrgentRequestsCount();
+      if (pendingCount > 0) {
+        quickActions.push({
+          text: `⚡ Переглянути ${pendingCount} заявок`,
+          callback_data: 'quick_review_requests',
+          priority: 20
+        });
+      }
+    }
+    
+    // Для PM/TL: якщо є заявки на затвердження
+    if (role === 'PM' || role === 'TL') {
+      const myApprovals = await getPendingApprovalsCount(telegramId);
+      if (myApprovals > 0) {
+        quickActions.push({
+          text: `⚡ Затвердити ${myApprovals} заявок`,
+          callback_data: 'quick_approve_requests',
+          priority: 20
+        });
+      }
+    }
+    
+    if (quickActions.length === 0) return;
+    
+    // Сортуємо за пріоритетом та показуємо максимум 3 дії
+    quickActions.sort((a, b) => b.priority - a.priority);
+    
+    const keyboard = {
+      inline_keyboard: quickActions.slice(0, 3).map(action => [{
+        text: action.text,
+        callback_data: action.callback_data
+      }])
+    };
+    
+    await sendMessage(chatId, '⚡ <b>Швидкі дії:</b>', keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showContextualQuickActions:', error);
+  }
+}
+
+// 🏠 ГОЛОВНЕ МЕНЮ З ДИНАМІЧНИМИ ПРІОРИТЕТАМИ
 async function showMainMenu(chatId, telegramId) {
   try {
     // Очищаємо історію навігації при поверненні до головного меню
     navigationStack.clearHistory(telegramId);
     
-    const role = await getUserRole(telegramId);
-    const user = await getUserInfo(telegramId);
+    // Паралельне завантаження даних для швидкості
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(telegramId)
+    ]);
     
     // Отримуємо ім'я користувача для персоналізованого привітання
     const userName = user?.fullName || 'колега';
     
-    let welcomeText = `👋 <b>Привіт, ${userName}!</b>
-
-Чим можу допомогти?`;
-
-    // Reply Keyboard (постійна клавіатура внизу)
-    const baseKeyboard = [
-      // Основні робочі функції (найважливіші)
-      [
-        { text: '🏖️ Відпустки' },
-        { text: '🏠 Remote' }
-      ],
-      [
-        { text: '⏰ Спізнення' },
-        { text: '🏥 Лікарняний' }
-      ],
-      // Додаткові функції
-      [
-        { text: '📊 Статистика' },
-        { text: '🎯 Онбординг' }
-      ],
-      // Тет (1:1)
-      [
-        { text: '📋 Тет' }
-      ],
-      // Довідка та допомога
-      [
-        { text: '❓ FAQ' },
-      ],
-      // Менше використовувані функції
-      [
-        { text: '💬 Пропозиції' },
-        { text: '🚨 ASAP запит' }
-      ]
+    // Базові пункти меню для всіх (з пріоритетами)
+    const baseMenuItems = [
+      { text: '🏖️ Відпустки', priority: 10 },
+      { text: '🏠 Remote', priority: 9 },
+      { text: '⏰ Спізнення', priority: 8 },
+      { text: '🏥 Лікарняний', priority: 7 },
+      { text: '📊 Статистика', priority: 6 },
+      { text: '🎯 Онбординг', priority: 5 },
+      { text: '📋 Тет', priority: 4 },
+      { text: '❓ FAQ', priority: 3 },
+      { text: '💬 Пропозиції', priority: 2 },
+      { text: '🚨 ASAP запит', priority: 1 }
     ];
-
-    if (role === 'PM' || role === 'HR' || role === 'CEO') {
-      baseKeyboard.push([
-        { text: '📋 Затвердження' },
-        { text: '📈 Аналітика' }
-      ]);
-    }
-
+    
+    // Пункти меню залежно від ролі (з бейджами)
+    let roleMenuItems = [];
+    let urgentCount = 0;
+    let criticalCount = 0;
+    let pendingCount = 0;
+    
+    // Паралельно завантажуємо бейджі для ролей (тільки потрібні)
+    const badgePromises = [];
     if (role === 'HR') {
-      baseKeyboard.push([
-        { text: '👥 HR Панель' },
-        { text: '📢 Розсилки' }
-      ]);
+      badgePromises.push(getUrgentRequestsCount().then(count => { urgentCount = count; }));
+    } else if (role === 'CEO') {
+      badgePromises.push(getCriticalAlertsCount().then(count => { criticalCount = count; }));
+    } else if (role === 'PM' || role === 'TL') {
+      badgePromises.push(getPendingApprovalsCount(telegramId).then(count => { pendingCount = count; }));
     }
-
-    if (role === 'CEO') {
-      baseKeyboard.push([
-        { text: '🏢 CEO Панель' }
-      ]);
+    
+    // Чекаємо на завантаження бейджів
+    if (badgePromises.length > 0) {
+      await Promise.all(badgePromises);
     }
+    
+    // Формуємо пункти меню залежно від ролі
+    if (role === 'HR') {
+      roleMenuItems = [
+        { text: '👥 HR Панель', priority: 16 },
+        { text: '📊 HR Дашборд', priority: 15 },
+        { text: '📋 Затвердження', priority: 14, badge: urgentCount },
+        { text: '📤 Масовий експорт', priority: 13 },
+        { text: '📈 Аналітика', priority: 12 },
+        { text: '📢 Розсилки', priority: 11 }
+      ];
+    } else if (role === 'CEO') {
+      roleMenuItems = [
+        { text: '🏢 CEO Панель', priority: 16 },
+        { text: '📈 Аналітика компанії', priority: 15 },
+        { text: '💼 Фінанси HR', priority: 14 },
+        { text: '⚡ Критичні алерти', priority: 13, badge: criticalCount },
+        { text: '📋 Затвердження', priority: 12 }
+      ];
+    } else if (role === 'PM' || role === 'TL') {
+      roleMenuItems = [
+        { text: '📋 На затвердження', priority: 12, badge: pendingCount },
+        { text: '📈 Аналітика', priority: 11 }
+      ];
+    }
+    
+    // Об'єднуємо меню
+    let menuItems = [...roleMenuItems, ...baseMenuItems];
+    
+    // Сортуємо за пріоритетом (вищі пріоритети спочатку)
+    menuItems.sort((a, b) => b.priority - a.priority);
+    
+    // Формуємо клавіатуру (по 2 кнопки в рядку)
+    const baseKeyboard = [];
+    for (let i = 0; i < menuItems.length; i += 2) {
+      const row = [];
+      const item1 = menuItems[i];
+      row.push({ 
+        text: item1.badge && item1.badge > 0 
+          ? `${item1.text} (${item1.badge})` 
+          : item1.text 
+      });
+      
+      if (i + 1 < menuItems.length) {
+        const item2 = menuItems[i + 1];
+        row.push({ 
+          text: item2.badge && item2.badge > 0 
+            ? `${item2.text} (${item2.badge})` 
+            : item2.text 
+        });
+      }
+      baseKeyboard.push(row);
+    }
+    
+    // Формуємо персоналізоване привітання
+    let welcomeText = `👋 <b>Привіт, ${userName}!</b>\n\n`;
+    
+    // Персоналізоване привітання залежно від ролі
+    if (role === 'HR') {
+      if (urgentCount > 0) {
+        welcomeText += `🚨 <b>Увага!</b> ${urgentCount} ${urgentCount === 1 ? 'заявка' : 'заявок'} потребують уваги!\n\n`;
+      } else {
+        welcomeText += `✅ Всі заявки оброблені. Гарного дня!\n\n`;
+      }
+    } else if (role === 'CEO') {
+      if (criticalCount > 0) {
+        welcomeText += `⚡ <b>${criticalCount} критичних алертів</b>\n\n`;
+      } else {
+        welcomeText += `📊 Все під контролем\n\n`;
+      }
+    } else if ((role === 'PM' || role === 'TL') && pendingCount > 0) {
+      welcomeText += `📋 ${pendingCount} ${pendingCount === 1 ? 'заявка' : 'заявок'} на затвердження\n\n`;
+    }
+    
+    welcomeText += `Чим можу допомогти?`;
 
     await sendMessage(chatId, welcomeText, baseKeyboard);
     
+    // Показуємо контекстні швидкі дії (якщо є)
+    await showContextualQuickActions(chatId, telegramId);
+    
     // Логування входу в головне меню
-    await logUserData(telegramId, 'main_menu_access', { role: role });
+    await logUserData(telegramId, 'main_menu_access', { 
+      role: role,
+      urgentCount: urgentCount,
+      criticalCount: criticalCount,
+      pendingCount: pendingCount
+    });
   } catch (error) {
     console.error('❌ Помилка showMainMenu:', error);
     await sendMessage(chatId, '❌ Помилка завантаження меню.');
@@ -1263,10 +1965,16 @@ async function handleReplyKeyboard(chatId, telegramId, text) {
       '💬 Пропозиції': showSuggestionsMenu,
       '🚨 ASAP запит': showASAPMenu,
       '📋 Затвердження': showApprovalsMenu,
+      '📋 На затвердження': showApprovalsMenu, // Для PM/TL
       '📈 Аналітика': showAnalyticsMenu,
+      '📈 Аналітика компанії': showAnalyticsMenu, // Для CEO
       '👥 HR Панель': showHRPanel,
+      '📊 HR Дашборд': showHRDashboardStats, // Новий пункт для HR
+      '📤 Масовий експорт': showHRExportMenu, // Новий пункт для HR
       '📢 Розсилки': showMailingsMenu,
-      '🏢 CEO Панель': showCEOPanel
+      '🏢 CEO Панель': showCEOPanel,
+      '💼 Фінанси HR': showHRPanel, // Поки що перенаправляємо на HR Панель
+      '⚡ Критичні алерти': showCEOPanel // Поки що перенаправляємо на CEO Панель
     };
     
     if (routes[text]) {
@@ -1761,8 +2469,12 @@ async function showVacationMenu(chatId, telegramId) {
     // Зберігаємо попередній стан перед показом меню
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
-    const user = await getUserInfo(telegramId);
-    const balance = await getVacationBalance(telegramId);
+    // Паралельне завантаження даних для швидкості
+    // Примітка: getVacationBalance всередині викликає getUserInfo, але це все одно швидше
+    const [user, balance] = await Promise.all([
+      getUserInfo(telegramId),
+      getVacationBalance(telegramId)
+    ]);
     
     const text = `🏖️ <b>Відпустки</b>
 
@@ -1806,53 +2518,56 @@ async function getVacationBalance(telegramId) {
     const user = await getUserInfo(telegramId);
     if (!user) return { used: 0, total: 24, available: 24 };
     
+    // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
+    return await sheetsQueue.add(async () => {
     await doc.loadInfo();
-    // Спробуємо спочатку українську назву, потім англійську для сумісності
-    let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
-    if (!sheet) return { used: 0, total: 24, available: 24, annual: 24, remaining: 24 };
+      // Спробуємо спочатку українську назву, потім англійську для сумісності
+      let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+      if (!sheet) return { used: 0, total: 24, available: 24, annual: 24, remaining: 24 };
     
     const rows = await sheet.getRows();
-    const workYearDates = getWorkYearDates(user.firstWorkDay);
+      const workYearDates = getWorkYearDates(user.firstWorkDay);
     
-    // Фільтруємо відпустки за робочий рік (або календарний рік, якщо немає дати першого робочого дня)
+      // Фільтруємо відпустки за робочий рік (або календарний рік, якщо немає дати першого робочого дня)
     const userVacations = rows.filter(row => {
       const rowTelegramId = row.get('TelegramID');
-      const rowStatus = row.get('Статус') || row.get('Status');
-      const rowStartDate = row.get('Дата початку') || row.get('StartDate');
+        const rowStatus = row.get('Статус') || row.get('Status');
+        const rowStartDate = row.get('Дата початку') || row.get('StartDate');
       
       if (rowTelegramId != telegramId) return false;
-      // Враховуємо тільки затверджені відпустки
-      if (rowStatus !== 'approved' && rowStatus !== 'Approved' && rowStatus !== 'затверджено') return false;
+        // Враховуємо тільки затверджені відпустки
+        if (rowStatus !== 'approved' && rowStatus !== 'Approved' && rowStatus !== 'затверджено') return false;
       if (!rowStartDate) return false;
       
       const startDate = new Date(rowStartDate);
-      
-      // Якщо є дата першого робочого дня, використовуємо робочий рік
-      if (workYearDates) {
-        return isInWorkYear(startDate, user.firstWorkDay);
-      }
-      
-      // Інакше використовуємо календарний рік
-      return startDate.getFullYear() === new Date().getFullYear();
+        
+        // Якщо є дата першого робочого дня, використовуємо робочий рік
+        if (workYearDates) {
+          return isInWorkYear(startDate, user.firstWorkDay);
+        }
+        
+        // Інакше використовуємо календарний рік
+        return startDate.getFullYear() === new Date().getFullYear();
     });
     
     const usedDays = userVacations.reduce((total, row) => {
-      const start = new Date(row.get('Дата початку') || row.get('StartDate'));
-      const end = new Date(row.get('Дата закінчення') || row.get('EndDate'));
-      const days = parseInt(row.get('Кількість днів') || row.get('Days') || 0);
+        const start = new Date(row.get('Дата початку') || row.get('StartDate'));
+        const end = new Date(row.get('Дата закінчення') || row.get('EndDate'));
+        const days = parseInt(row.get('Кількість днів') || row.get('Days') || 0);
       return total + (days || Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1);
     }, 0);
-    
-    const annual = 24; // 24 календарних дні на рік
-    const remaining = Math.max(0, annual - usedDays);
+      
+      const annual = 24; // 24 календарних дні на рік
+      const remaining = Math.max(0, annual - usedDays);
     
     return {
       used: usedDays,
-      total: annual,
-      annual: annual,
-      available: remaining,
-      remaining: remaining
-    };
+        total: annual,
+        annual: annual,
+        available: remaining,
+        remaining: remaining
+      };
+    });
   } catch (error) {
     console.error('❌ Помилка getVacationBalance:', error);
     return { used: 0, total: 24, available: 24 };
@@ -1887,8 +2602,8 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
   }
 }
 
-// 📄 МОЇ ЗАЯВКИ НА ВІДПУСТКУ
-async function showMyVacationRequests(chatId, telegramId) {
+// 📄 МОЇ ЗАЯВКИ НА ВІДПУСТКУ (З ПАГІНАЦІЄЮ)
+async function showMyVacationRequests(chatId, telegramId, page = 0) {
   try {
     // Зберігаємо попередній стан (меню відпусток)
     navigationStack.pushState(telegramId, 'showVacationMenu', {});
@@ -1898,61 +2613,117 @@ async function showMyVacationRequests(chatId, telegramId) {
       return;
     }
     
+    const PAGE_SIZE = 5;
+    
+    // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
+    await sheetsQueue.add(async () => {
     await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+      const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
     if (!sheet) {
       await sendMessage(chatId, '📋 У вас поки немає заявок на відпустку.');
       return;
     }
     
     const rows = await sheet.getRows();
+      
+      // Підтримуємо обидва формати назв колонок
+      const isUkrainianSheet = sheet.title === 'Відпустки';
+      const getValue = (row, uaKey, enKey) => {
+        const value = isUkrainianSheet ? row.get(uaKey) : row.get(enKey);
+        if (value === undefined || value === null || value === '') {
+          const fallback = isUkrainianSheet ? row.get(enKey) : row.get(uaKey);
+          return fallback;
+        }
+        return value;
+      };
+      
     const userRequests = rows
-      .filter(row => row.get('TelegramID') == telegramId)
-      .sort((a, b) => {
-        const dateA = new Date(a.get('StartDate'));
-        const dateB = new Date(b.get('StartDate'));
-        return dateB - dateA; // Сортуємо від нових до старих
-      })
-      .slice(0, 10); // Показуємо останні 10 заявок
+        .filter(row => {
+          const rowTelegramId = row.get('TelegramID');
+          return rowTelegramId == telegramId;
+        })
+        .map(row => {
+          const startDateStr = getValue(row, 'Дата початку', 'StartDate');
+          const startDate = startDateStr ? new Date(startDateStr) : new Date(0);
+          return { row, startDate };
+        })
+        .sort((a, b) => b.startDate - a.startDate) // Сортуємо від нових до старих
+        .map(item => item.row);
     
     if (userRequests.length === 0) {
       await sendMessage(chatId, '📋 У вас поки немає заявок на відпустку.');
       return;
     }
     
-    let text = `📄 <b>Мої заявки на відпустку</b>\n\n`;
-    
-    userRequests.forEach((row, index) => {
-      const status = row.get('Status');
-      const startDate = row.get('StartDate');
-      const endDate = row.get('EndDate');
-      const days = row.get('Days');
-      const requestType = row.get('RequestType') || 'regular';
+      // Розраховуємо пагінацію
+      const totalPages = Math.ceil(userRequests.length / PAGE_SIZE);
+      const currentPage = Math.max(0, Math.min(page, totalPages - 1));
+      const start = currentPage * PAGE_SIZE;
+      const end = start + PAGE_SIZE;
+      const pageRequests = userRequests.slice(start, end);
+      
+      let text = `📄 <b>Мої заявки на відпустку</b>\n`;
+      text += `📄 Сторінка ${currentPage + 1} з ${totalPages}\n\n`;
+      
+      pageRequests.forEach((row, index) => {
+        const globalIndex = start + index + 1;
+        const status = getValue(row, 'Статус', 'Status');
+        const startDate = getValue(row, 'Дата початку', 'StartDate');
+        const endDate = getValue(row, 'Дата закінчення', 'EndDate');
+        const days = getValue(row, 'Кількість днів', 'Days');
+        const requestType = getValue(row, 'Тип заявки', 'RequestType') || 'regular';
+        const requestId = getValue(row, 'ID заявки', 'RequestID') || '';
       
       let statusEmoji = '⏳';
       let statusText = 'Очікує';
-      if (status === 'approved') {
+        if (status === 'approved' || status === 'Approved' || status === 'затверджено') {
         statusEmoji = '✅';
         statusText = 'Затверджено';
-      } else if (status === 'rejected') {
+        } else if (status === 'rejected' || status === 'Rejected' || status === 'відхилено') {
         statusEmoji = '❌';
         statusText = 'Відхилено';
-      } else if (status === 'pending_hr') {
+        } else if (status === 'pending_hr' || status === 'Pending HR') {
         statusText = 'Очікує HR';
-      } else if (status === 'pending_pm') {
+        } else if (status === 'pending_pm' || status === 'Pending PM') {
         statusText = 'Очікує PM';
       }
       
-      const typeText = requestType === 'emergency' ? '🚨 Екстрена' : '📝 Звичайна';
+        const typeText = requestType === 'emergency' || requestType === 'Екстрена' ? '🚨 Екстрена' : '📝 Звичайна';
+        
+        text += `${globalIndex}. ${statusEmoji} <b>${statusText}</b> ${typeText}\n`;
+        text += `   📅 ${startDate} - ${endDate} (${days} днів)\n`;
+        if (requestId) {
+          text += `   🆔 ID: ${requestId}\n`;
+        }
+        text += `\n`;
+      });
       
-      text += `${index + 1}. ${statusEmoji} <b>${statusText}</b> ${typeText}\n`;
-      text += `   📅 ${startDate} - ${endDate} (${days} днів)\n\n`;
-    });
+      const keyboard = { inline_keyboard: [] };
+      
+      // Кнопки навігації
+      const navButtons = [];
+      if (currentPage > 0) {
+        navButtons.push({ 
+          text: '◀️ Попередня', 
+          callback_data: `vacation_requests_page_${currentPage - 1}` 
+        });
+      }
+      if (currentPage < totalPages - 1) {
+        navButtons.push({ 
+          text: 'Наступна ▶️', 
+          callback_data: `vacation_requests_page_${currentPage + 1}` 
+        });
+      }
+      
+      if (navButtons.length > 0) {
+        keyboard.inline_keyboard.push(navButtons);
+      }
+      
+      // Додаємо кнопку "Назад"
+      addBackButton(keyboard, telegramId, 'showMyVacationRequests');
     
-    const keyboard = { inline_keyboard: [] };
-    // Додаємо кнопку "Назад"
-    addBackButton(keyboard, telegramId, 'showMyVacationRequests');
     await sendMessage(chatId, text, keyboard);
+    });
   } catch (error) {
     console.error('❌ Помилка showMyVacationRequests:', error);
     await sendMessage(chatId, '❌ Помилка завантаження заявок.');
@@ -2208,26 +2979,22 @@ async function showMonthlyStats(chatId, telegramId) {
     const now = new Date();
     const monthName = now.toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' });
     
-    // Отримуємо статистику
-    const vacationBalance = await getVacationBalance(telegramId);
+    // Паралельне завантаження всієї статистики для швидкості
+    const [vacationBalance, remoteStatsResult, lateStatsResult] = await Promise.allSettled([
+      getVacationBalance(telegramId),
+      getRemoteStatsForCurrentMonth(telegramId).catch(err => {
+        console.error('Помилка отримання Remote статистики (showMonthlyStats):', err);
+        return { used: 0 };
+      }),
+      getLateStatsForCurrentMonth(telegramId).catch(err => {
+        console.error('Помилка отримання статистики спізнень (showMonthlyStats):', err);
+        return { count: 0 };
+      })
+    ]);
     
-    // Отримуємо статистику Remote за місяць
-    let remoteCount = 0;
-    try {
-      const remoteStats = await getRemoteStatsForCurrentMonth(telegramId);
-      remoteCount = remoteStats.used || 0;
-    } catch (error) {
-      console.error('Помилка отримання Remote статистики (showMonthlyStats):', error);
-    }
-    
-    // Отримуємо статистику спізнень за місяць
-    let lateCount = 0;
-    try {
-      const lateStats = await getLateStatsForCurrentMonth(telegramId);
-      lateCount = lateStats.count || 0;
-    } catch (error) {
-      console.error('Помилка отримання статистики спізнень (showMonthlyStats):', error);
-    }
+    const balance = vacationBalance.status === 'fulfilled' ? vacationBalance.value : { used: 0, total: 24, available: 24, annual: 24, remaining: 24 };
+    const remoteCount = remoteStatsResult.status === 'fulfilled' ? (remoteStatsResult.value.used || 0) : 0;
+    const lateCount = lateStatsResult.status === 'fulfilled' ? (lateStatsResult.value.count || 0) : 0;
     
     let text = `📊 <b>Моя статистика за ${monthName}</b>\n\n`;
     text += `👤 <b>${user.fullName}</b>\n`;
@@ -2240,9 +3007,9 @@ async function showMonthlyStats(chatId, telegramId) {
     text += `\n`;
     
     text += `🏖️ <b>Відпустки:</b>\n`;
-    const annual = vacationBalance.annual || vacationBalance.total || 24;
-    const remaining = vacationBalance.remaining || vacationBalance.available || 0;
-    const used = vacationBalance.used || 0;
+    const annual = balance.annual || balance.total || 24;
+    const remaining = balance.remaining || balance.available || 0;
+    const used = balance.used || 0;
     text += `💰 Баланс: ${remaining}/${annual} днів\n`;
     text += `📅 Використано: ${used} днів\n\n`;
     
@@ -2326,7 +3093,7 @@ function isInWorkYear(date, firstWorkDay) {
 // 🏖️ ЗВІТ ПО ВІДПУСТКАХ
 async function showVacationStatsReport(chatId, telegramId, targetTelegramId = null) {
   try {
-    // Перевірка доступу
+    // Перевірка доступу та отримання даних паралельно
     const role = await getUserRole(telegramId);
     const isHRorCEO = role === 'HR' || role === 'CEO';
     
@@ -2341,6 +3108,7 @@ async function showVacationStatsReport(chatId, telegramId, targetTelegramId = nu
     // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showStatsMenu', {});
     
+    // Отримуємо дані користувача (вже знаємо reportTelegramId)
     const user = await getUserInfo(reportTelegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений.');
@@ -3253,6 +4021,27 @@ async function getSickStats(telegramId) {
 
 // 📢 ФУНКЦІЇ РОЗСИЛКИ HR
 
+function personalizeMailingMessage(template, userData) {
+  if (!template || typeof template !== 'string' || !userData) {
+    return template;
+  }
+
+  const replacements = {
+    name: userData.fullName || 'колего',
+    department: userData.department || '',
+    team: userData.team || '',
+    position: userData.position || ''
+  };
+
+  let result = template;
+  Object.entries(replacements).forEach(([token, value]) => {
+    const regex = new RegExp(`{{\\s*${token}\\s*}}`, 'gi');
+    result = result.replace(regex, value || '');
+  });
+
+  return result;
+}
+
 // Розсилка всім співробітникам
 async function startMailingToAll(chatId, telegramId) {
   try {
@@ -3549,13 +4338,31 @@ async function sendMailing(chatId, telegramId, mailingData, message) {
       return;
     }
 
+    const templateHasPlaceholders = /{{\s*(name|department|team|position)\s*}}/i.test(message);
+    const usersInfo = templateHasPlaceholders ? await getUsersInfoBatch(recipients) : {};
+
     // Відправляємо повідомлення
     let successCount = 0;
     let failCount = 0;
 
     for (const recipientId of recipients) {
       try {
-        await bot.sendMessage(recipientId, `📢 <b>Повідомлення від HR</b>\n\n${message}`, { parse_mode: 'HTML' });
+        const normalizedId = recipientId?.toString();
+        const userData = templateHasPlaceholders ? usersInfo[normalizedId] : null;
+        const personalizedBody = templateHasPlaceholders
+          ? personalizeMailingMessage(message, userData)
+          : message;
+
+        if (templateHasPlaceholders && !userData) {
+          console.warn(`⚠️ Дані користувача ${recipientId} не знайдені для персоналізації розсилки`);
+        }
+
+        const chatIdToSend = Number(recipientId) || recipientId;
+        await bot.sendMessage(
+          chatIdToSend,
+          `📢 <b>Повідомлення від HR</b>\n\n${personalizedBody}`,
+          { parse_mode: 'HTML' }
+        );
         successCount++;
       } catch (error) {
         console.error(`❌ Помилка відправки до ${recipientId}:`, error);
@@ -3891,36 +4698,83 @@ async function processEmergencyVacationRequest(chatId, telegramId, vacationData)
       throw new ValidationError('Користувач не знайдений. Пройдіть реєстрацію.', 'user');
     }
     
-    const { startDate, days, reason } = vacationData;
+    const { startDate: startDateRaw, days, reason } = vacationData;
+    
+    // Переконуємося, що startDate є Date об'єктом
+    let startDate;
+    if (startDateRaw instanceof Date) {
+      startDate = new Date(startDateRaw);
+    } else if (typeof startDateRaw === 'string') {
+      startDate = new Date(startDateRaw);
+    } else {
+      throw new ValidationError('Невірна дата початку відпустки.', 'startDate');
+    }
+    
+    // Перевірка валідності дати
+    if (isNaN(startDate.getTime())) {
+      throw new ValidationError('Невірна дата початку відпустки.', 'startDate');
+    }
+    
+    // Перевірка кількості днів
+    const daysNum = parseInt(days);
+    if (isNaN(daysNum) || daysNum < 1 || daysNum > 7) {
+      throw new ValidationError('Кількість днів має бути від 1 до 7.', 'days');
+    }
+    
+    // Перевірка причини
+    if (!reason || reason.trim().length < 10) {
+      throw new ValidationError('Причина має бути мінімум 10 символів.', 'reason');
+    }
+    
+    // Обчислюємо дату закінчення
     const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + days - 1);
+    endDate.setDate(endDate.getDate() + daysNum - 1);
+    
+    // Перевірка валідності дати закінчення
+    if (isNaN(endDate.getTime())) {
+      throw new ValidationError('Невірна дата закінчення відпустки.', 'endDate');
+    }
     
     // Зберігаємо заявку в таблицю з типом emergency
-    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, days, 'pending_hr', null, 'emergency', reason);
+    const requestId = await saveVacationRequest(telegramId, user, startDate, endDate, daysNum, 'pending_hr', null, 'emergency', reason.trim());
+    
+    if (!requestId) {
+      throw new DatabaseError('Не вдалося зберегти заявку на відпустку.', 'save_vacation');
+    }
     
     // Відправляємо тільки HR з інформацією про екстрену відпустку
-    await notifyHRAboutEmergencyVacation(user, requestId, startDate, endDate, days, reason);
+    await notifyHRAboutEmergencyVacation(user, requestId, startDate, endDate, daysNum, reason.trim());
     
     // Підтвердження користувачу
-    await sendMessage(chatId, `✅ <b>Екстрена заявка на відпустку відправлена!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n\n⏳ Заявка відправлена напряму HR для розгляду. Ви отримаєте відповідь найближчим часом.`);
+    await sendMessage(chatId, `✅ <b>Екстрена заявка на відпустку відправлена!</b>\n\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${daysNum}\n\n⏳ Заявка відправлена напряму HR для розгляду. Ви отримаєте відповідь найближчим часом.`);
     
     // Логування
     await logUserData(telegramId, 'emergency_vacation_request', {
       requestId,
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
-      days,
+      days: daysNum,
       hasReason: !!reason,
       department: user.department,
       team: user.team
     });
     
+    logger.success('Emergency vacation request processed successfully', { telegramId, requestId });
+    
   } catch (error) {
     if (error instanceof ValidationError) {
       logger.warn('Validation error in emergency vacation request', { telegramId, error: error.message });
       await sendMessage(chatId, `❌ ${error.message}`);
+    } else if (error instanceof DatabaseError) {
+      logger.error('Database error in emergency vacation request', error, { telegramId });
+      await sendMessage(chatId, `❌ ${error.message}\n\nБудь ласка, спробуйте пізніше або зверніться до HR.`);
     } else {
-      logger.error('Unexpected error in emergency vacation request', error, { telegramId });
+      logger.error('Unexpected error in emergency vacation request', error, { 
+        telegramId, 
+        vacationData,
+        errorMessage: error.message,
+        errorStack: error.stack 
+      });
       await sendMessage(chatId, '❌ Помилка обробки заявки. Спробуйте пізніше або зверніться до HR.');
     }
   }
@@ -3938,9 +4792,50 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
   try {
     logger.info('Processing vacation request', { telegramId, vacationData });
     
-    const user = await getUserInfo(telegramId);
+    // Отримуємо дані користувача з обов'язковою перевіркою
+    let user = await getUserInfo(telegramId);
     if (!user) {
       throw new ValidationError('Користувач не знайдений. Пройдіть реєстрацію.', 'user');
+    }
+    
+    // КРИТИЧНО: Перевіряємо, чи є fullName, якщо немає - перезавантажуємо та виправляємо
+    if (!user.fullName && !user.FullName) {
+      console.warn(`⚠️ КРИТИЧНО: Користувач ${telegramId} не має fullName!`);
+      console.warn(`📋 Поточні дані користувача:`, JSON.stringify(user, null, 2));
+      
+      // Очищаємо кеш та перезавантажуємо
+      userCache.delete(telegramId);
+      user = await getUserInfo(telegramId);
+      
+      if (!user || (!user.fullName && !user.FullName)) {
+        console.error(`❌ КРИТИЧНА ПОМИЛКА: Не вдалося отримати fullName для користувача ${telegramId}`);
+        throw new ValidationError(`Ваші дані не знайдені в системі. Будь ласка, зверніться до HR для перевірки реєстрації.`, 'user_data_missing');
+      }
+    }
+    
+    // Нормалізуємо fullName (використовуємо той, що є)
+    if (!user.fullName && user.FullName) {
+      user.fullName = user.FullName;
+    }
+    if (!user.department && user.Department) {
+      user.department = user.Department;
+    }
+    if (!user.team && user.Team) {
+      user.team = user.Team;
+    }
+    
+    // Детальна перевірка даних користувача
+    console.log('📋 processVacationRequest - дані користувача після нормалізації:', {
+      telegramId,
+      fullName: user.fullName,
+      department: user.department,
+      team: user.team
+    });
+    
+    // Фінальна перевірка - якщо все ще немає fullName, кидаємо помилку
+    if (!user.fullName) {
+      console.error(`❌ КРИТИЧНА ПОМИЛКА: fullName все ще відсутнє після нормалізації для користувача ${telegramId}`);
+      throw new ValidationError(`Ваші дані некоректні в системі. Будь ласка, зверніться до HR.`, 'user_data_invalid');
     }
     
     const { startDate, days } = vacationData;
@@ -3995,8 +4890,12 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       return;
     }
     
-    // Перевіряємо баланс відпусток
-    const balance = await getVacationBalance(telegramId);
+    // Паралельно перевіряємо баланс та отримуємо PM для швидкості
+    const [balance, pm] = await Promise.all([
+      getVacationBalance(telegramId),
+      getPMForUser(user)
+    ]);
+    
     if (balance.remaining < daysNum) {
       // Якщо днів немає або недостатньо - відмовляємо і повідомляємо HR
       const remainingText = balance.remaining === 0 
@@ -4020,9 +4919,6 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       }
       console.log('✅ Google Sheets перепідключено успішно');
     }
-    
-    // Перевіряємо чи є PM для користувача
-    const pm = await getPMForUser(user);
     const hasPM = pm !== null;
     
     // Визначаємо статус заявки
@@ -4030,6 +4926,14 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     
     // Зберігаємо заявку в таблицю
     const requestId = await saveVacationRequest(telegramId, user, startDateObj, endDate, daysNum, initialStatus, pm);
+    
+    if (!requestId) {
+      throw new DatabaseError('Не вдалося зберегти заявку на відпустку.', 'save_vacation');
+    }
+    
+    // Невелика затримка, щоб заявка точно збереглася в Google Sheets перед пошуком
+    // Збільшуємо затримку для надійності (Google Sheets API може мати затримку синхронізації)
+    await new Promise(resolve => setTimeout(resolve, 2000));
     
     // Оновлюємо баланс відпусток (тільки після затвердження)
     // await updateVacationBalance(telegramId, user, days);
@@ -4091,6 +4995,8 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
   try {
     if (!doc) return [];
     
+    // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
+    return await sheetsQueue.add(async () => {
     await doc.loadInfo();
     let sheet = doc.sheetsByTitle['Vacations'];
     if (!sheet) return [];
@@ -4130,6 +5036,7 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
     }
     
     return conflicts;
+    });
   } catch (error) {
     console.error('❌ Помилка checkVacationConflicts:', error);
     return [];
@@ -4153,52 +5060,155 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
         throw new DatabaseError('Google Sheets не підключено', 'save_vacation');
       }
       
+      // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
+      return await sheetsQueue.add(async () => {
       await doc.loadInfo();
-      let sheet = doc.sheetsByTitle['Відпустки'];
+        // Спробуємо спочатку українську назву, потім англійську для сумісності
+        let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
       if (!sheet) {
+        console.log(`📋 Створюємо новий лист "Відпустки"...`);
         sheet = await doc.addSheet({
-          title: 'Відпустки',
+            title: 'Відпустки',
           headerValues: [
-            'ID заявки', 'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'PM',
-            'Дата початку', 'Дата закінчення', 'Кількість днів', 'Статус', 
-            'Тип заявки', 'Причина', 'Дата створення', 'Затверджено ким', 'Дата затвердження',
-            'Баланс до', 'Баланс після'
+              'ID заявки', 'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'PM',
+              'Дата початку', 'Дата закінчення', 'Кількість днів', 'Статус', 
+              'Тип заявки', 'Причина', 'Дата створення', 'Затверджено ким', 'Дата затвердження',
+              'Відхилено ким', 'Причина відхилення', 'Баланс до', 'Баланс після', 'Дата оновлення'
           ]
         });
+        console.log(`✅ Лист "Відпустки" створено`);
+      } else {
+        console.log(`📋 Використовуємо існуючий лист "${sheet.title}" (ID: ${sheet.sheetId})`);
       }
       
       const requestId = `VAC_${Date.now()}_${telegramId}`;
       const pmName = pm ? pm.fullName : (user.pm || 'Не призначено');
       
-      // Отримуємо баланс до додавання відпустки
-      const balanceBefore = await getVacationBalance(telegramId);
-      const balanceAfter = {
-        remaining: Math.max(0, balanceBefore.remaining - days),
-        used: balanceBefore.used + days
+        // Отримуємо баланс до додавання відпустки
+        const balanceBefore = await getVacationBalance(telegramId);
+        const balanceAfter = {
+          remaining: Math.max(0, balanceBefore.remaining - days),
+          used: balanceBefore.used + days
+        };
+      
+      const now = new Date().toISOString();
+      const rowData = {
+          'ID заявки': requestId,
+          'TelegramID': telegramId,
+          'Ім\'я та прізвище': user?.fullName || user?.FullName || 'Невідомо',
+          'Відділ': user?.department || user?.Department || 'Невідомо',
+          'Команда': user?.team || user?.Team || 'Невідомо',
+          'PM': pmName,
+          'Дата початку': startDate.toISOString().split('T')[0],
+          'Дата закінчення': endDate.toISOString().split('T')[0],
+          'Кількість днів': days,
+          'Статус': status,
+          'Тип заявки': requestType,
+          'Причина': reason || '',
+          'Дата створення': now,
+          'Затверджено ким': '',
+          'Дата затвердження': '',
+          'Відхилено ким': '',
+          'Причина відхилення': '',
+          'Баланс до': balanceBefore.remaining,
+          'Баланс після': balanceAfter.remaining,
+          'Дата оновлення': now
       };
       
-      await sheet.addRow({
-        'ID заявки': requestId,
-        'TelegramID': telegramId,
-        'Ім\'я та прізвище': user.fullName,
-        'Відділ': user.department,
-        'Команда': user.team,
-        'PM': pmName,
-        'Дата початку': startDate.toISOString().split('T')[0],
-        'Дата закінчення': endDate.toISOString().split('T')[0],
-        'Кількість днів': days,
-        'Статус': status,
-        'Тип заявки': requestType,
-        'Причина': reason || '',
-        'Дата створення': new Date().toISOString(),
-        'Затверджено ким': '',
-        'Дата затвердження': '',
-        'Баланс до': balanceBefore.remaining,
-        'Баланс після': balanceAfter.remaining
-      });
+      console.log(`📝 Зберігаємо заявку ${requestId} в таблицю "${sheet.title}"...`);
+      console.log(`📋 Дані для збереження:`, JSON.stringify(rowData, null, 2));
+      
+      const savedRow = await sheet.addRow(rowData);
+      
+      // Перевіряємо, чи рядок дійсно збережено
+      if (!savedRow) {
+        throw new DatabaseError('Не вдалося зберегти рядок в Google Sheets', 'save_vacation');
+      }
+      
+      console.log(`✅ Рядок створено, зберігаємо...`);
+      
+      // Явно зберігаємо рядок для гарантії
+      await savedRow.save();
+      
+      console.log(`✅ Рядок збережено, перевіряємо ID...`);
+      
+      // Перевіряємо, що ID заявки правильно збережено
+      const savedId = savedRow.get('ID заявки') || savedRow.get('RequestID');
+      console.log(`📋 ID заявки: очікувалось="${requestId}" (тип: ${typeof requestId}), збережено="${savedId}" (тип: ${typeof savedId}), співпадає=${savedId === requestId}`);
+      
+      if (savedId !== requestId) {
+        console.warn(`⚠️ Увага: ID заявки не співпадає! Очікувалось: ${requestId}, збережено: ${savedId}`);
+        // Спробуємо виправити ID
+        try {
+          const isUkrainianSheet = sheet.title === 'Відпустки';
+          if (isUkrainianSheet) {
+            savedRow.set('ID заявки', requestId);
+          } else {
+            savedRow.set('RequestID', requestId);
+          }
+          await savedRow.save();
+          console.log(`✅ ID заявки виправлено на: ${requestId}`);
+        } catch (error) {
+          console.error(`❌ Не вдалося виправити ID заявки:`, error);
+        }
+      }
+      
+      // Оновлюємо інформацію про лист для синхронізації
+      await doc.loadInfo();
+      await sheet.loadCells();
+      
+      // Перевіряємо, що рядок дійсно доступний
+      const verifyId = savedRow.get('ID заявки') || savedRow.get('RequestID');
+      console.log(`🔍 Після оновлення: ID в рядку="${verifyId}", співпадає=${verifyId === requestId}`);
       
       console.log(`✅ Збережено заявку на відпустку: ${requestId}, статус: ${status}, тип: ${requestType}`);
+      console.log(`📋 Дані заявки:`, {
+        requestId,
+        savedId,
+        telegramId,
+        userName: rowData['Ім\'я та прізвище'],
+        department: rowData['Відділ'],
+        team: rowData['Команда'],
+        startDate: rowData['Дата початку'],
+        endDate: rowData['Дата закінчення'],
+        days: rowData['Кількість днів'],
+        status: rowData['Статус']
+      });
+      
+      // Зберігаємо заявку в тимчасовий кеш для швидкого пошуку
+      vacationRequestsCache.set(requestId, {
+        requestId,
+        telegramId,
+        savedRow: savedRow,
+        rowData: rowData,
+        savedAt: Date.now()
+      });
+      console.log(`💾 Заявка ${requestId} збережена в тимчасовий кеш`);
+      
+      // Очікуємо, поки заявка з'явиться в таблиці (до 5 секунд)
+      let foundInVerification = false;
+      for (let i = 0; i < 5; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Оновлюємо інформацію про лист перед перевіркою
+        await doc.loadInfo();
+        const verificationSheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+        if (verificationSheet) {
+          const verificationRow = await findVacationRowById(verificationSheet, requestId);
+          if (verificationRow.row) {
+            console.log(`✅ Перевірка: заявка ${requestId} знайдена в таблиці після ${i + 1} секунд(и)`);
+            foundInVerification = true;
+            break;
+          }
+        }
+      }
+      
+      if (!foundInVerification) {
+        console.warn(`⚠️ Увага: заявка ${requestId} не знайдена після 5 секунд очікування. Можлива затримка синхронізації Google Sheets. Але заявка збережена в кеші.`);
+      }
+      
       return requestId;
+      });
     },
     'saveVacationRequest',
     { telegramId, requestType, status }
@@ -4257,13 +5267,65 @@ async function notifyHRAboutVacationRequest(user, requestId, startDate, endDate,
   try {
     if (!HR_CHAT_ID) return;
     
+    // Детальна перевірка та логування даних користувача
+    if (!user) {
+      console.error('❌ notifyHRAboutVacationRequest: user об\'єкт відсутній');
+      return;
+    }
+    
+    console.log('📋 notifyHRAboutVacationRequest - дані користувача:', {
+      hasUser: !!user,
+      fullName: user.fullName,
+      FullName: user.FullName,
+      department: user.department,
+      team: user.team,
+      telegramId: user.telegramId
+    });
+    
+    // КРИТИЧНО: Перевіряємо та нормалізуємо дані користувача
+    // Якщо fullName відсутнє, спробуємо перезавантажити дані
+    if (!user.fullName && !user.FullName) {
+      console.warn(`⚠️ КРИТИЧНО: Користувач ${user.telegramId} не має fullName в notifyHRAboutVacationRequest`);
+      console.warn(`📋 Поточні дані:`, JSON.stringify(user, null, 2));
+      
+      // Очищаємо кеш та перезавантажуємо
+      userCache.delete(user.telegramId);
+      const refreshedUser = await getUserInfo(user.telegramId);
+      if (refreshedUser && (refreshedUser.fullName || refreshedUser.FullName)) {
+        Object.assign(user, refreshedUser);
+        console.log(`✅ Дані користувача перезавантажено: ${refreshedUser.fullName || refreshedUser.FullName}`);
+      }
+    }
+    
+    // Нормалізуємо дані користувача
+    if (!user.fullName && user.FullName) {
+      user.fullName = user.FullName;
+    }
+    if (!user.department && user.Department) {
+      user.department = user.Department;
+    }
+    if (!user.team && user.Team) {
+      user.team = user.Team;
+    }
+    
+    // Перевіряємо, чи є дані користувача з детальним fallback
+    let userName = user.fullName || user.FullName;
+    if (!userName || userName === 'undefined' || userName === '') {
+      userName = 'Невідомо';
+      console.error(`❌ КРИТИЧНА ПОМИЛКА: Користувач ${user.telegramId} не має імені після всіх спроб. Об'єкт user:`, JSON.stringify(user, null, 2));
+    }
+    
+    const userDepartment = (user.department || user.Department || 'Невідомо').toString();
+    const userTeam = (user.team || user.Team || 'Невідомо').toString();
+    const userPM = (user.pm || user.PM || 'Не призначено').toString();
+    
     let message = `📋 <b>НОВА ЗАЯВКА НА ВІДПУСТКУ</b>\n\n`;
-    message += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
-    message += `🏢 <b>Відділ:</b> ${user.department}\n`;
-    message += `👥 <b>Команда:</b> ${user.team}\n`;
+    message += `👤 <b>Співробітник:</b> ${userName}\n`;
+    message += `🏢 <b>Відділ:</b> ${userDepartment}\n`;
+    message += `👥 <b>Команда:</b> ${userTeam}\n`;
     message += `📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n`;
     message += `📊 <b>Днів:</b> ${days}\n`;
-    message += `👤 <b>PM:</b> ${user.pm || 'Не призначено'}\n`;
+    message += `👤 <b>PM:</b> ${userPM}\n`;
     message += `🆔 <b>ID заявки:</b> ${requestId}\n\n`;
     
     // Додаємо інформацію про пересічення
@@ -4363,17 +5425,28 @@ async function notifyHRAboutVacationDenial(user, startDate, endDate, days, remai
  */
 async function notifyHRAboutEmergencyVacation(user, requestId, startDate, endDate, days, reason) {
   try {
-    if (!HR_CHAT_ID) return;
+    if (!HR_CHAT_ID) {
+      logger.warn('HR_CHAT_ID not set, cannot notify HR about emergency vacation', { requestId });
+      throw new TelegramError('HR_CHAT_ID не встановлено. Неможливо відправити повідомлення HR.');
+    }
+    
+    // Переконуємося, що дати є Date об'єктами
+    const startDateObj = startDate instanceof Date ? startDate : new Date(startDate);
+    const endDateObj = endDate instanceof Date ? endDate : new Date(endDate);
+    
+    if (isNaN(startDateObj.getTime()) || isNaN(endDateObj.getTime())) {
+      throw new ValidationError('Невірні дати для екстреної відпустки.', 'dates');
+    }
     
     let message = `🚨 <b>ЕКСТРЕНА ВІДПУСТКА</b>\n\n`;
-    message += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
-    message += `🏢 <b>Відділ:</b> ${user.department}\n`;
-    message += `👥 <b>Команда:</b> ${user.team}\n`;
-    message += `📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n`;
+    message += `👤 <b>Співробітник:</b> ${user.fullName || 'Невідомо'}\n`;
+    message += `🏢 <b>Відділ:</b> ${user.department || 'Невідомо'}\n`;
+    message += `👥 <b>Команда:</b> ${user.team || 'Невідомо'}\n`;
+    message += `📅 <b>Період:</b> ${formatDate(startDateObj)} - ${formatDate(endDateObj)}\n`;
     message += `📊 <b>Днів:</b> ${days}\n`;
     message += `🆔 <b>ID заявки:</b> ${requestId}\n\n`;
     message += `🔒 <b>КОНФІДЕНЦІЙНА ІНФОРМАЦІЯ</b>\n`;
-    message += `📝 <b>Причина:</b> ${reason}\n\n`;
+    message += `📝 <b>Причина:</b> ${reason || 'Не вказано'}\n\n`;
     message += `⚠️ Ця інформація доступна тільки HR і CEO агенції.\n\n`;
     message += `⏳ <b>Потребує негайного розгляду</b>`;
     
@@ -4389,16 +5462,28 @@ async function notifyHRAboutEmergencyVacation(user, requestId, startDate, endDat
     
     await sendMessage(HR_CHAT_ID, message, keyboard);
     
+    logger.success('HR notified about emergency vacation', { 
+      requestId, 
+      hrChatId: HR_CHAT_ID,
+      userTelegramId: user.telegramId 
+    });
+    
     // Логування
     await logUserData(user.telegramId, 'emergency_vacation_hr_notification', {
       requestId,
-      startDate: startDate.toISOString(),
-      endDate: endDate.toISOString(),
+      startDate: startDateObj.toISOString(),
+      endDate: endDateObj.toISOString(),
       days,
       hasReason: !!reason
     });
   } catch (error) {
-    console.error('❌ Помилка notifyHRAboutEmergencyVacation:', error);
+    logger.error('Error in notifyHRAboutEmergencyVacation', error, { 
+      requestId, 
+      userTelegramId: user?.telegramId,
+      hrChatId: HR_CHAT_ID 
+    });
+    // Прокидаємо помилку далі, щоб processEmergencyVacationRequest міг її обробити
+    throw error;
   }
 }
 
@@ -4442,50 +5527,179 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
       return;
     }
     
-    await doc.loadInfo();
-    // Спробуємо спочатку українську назву, потім англійську для сумісності
-    let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
-    if (!sheet) {
+    // Спочатку перевіряємо тимчасовий кеш - якщо там є збережений рядок, використовуємо його
+    const cachedRequest = vacationRequestsCache.get(requestId);
+    let requestRowData = null;
+    let attempts = 0; // Ініціалізуємо attempts
+    
+    if (cachedRequest && cachedRequest.savedRow) {
+      console.log(`💾 Заявка ${requestId} знайдена в тимчасовому кеші, використовуємо збережений рядок`);
+      
+      try {
+        // Перевіряємо, чи рядок дійсно має правильний ID
+        const cachedId = cachedRequest.savedRow.get('ID заявки') || cachedRequest.savedRow.get('RequestID');
+        console.log(`🔍 Перевірка кешованого рядка: очікувалось="${requestId}", знайдено="${cachedId}"`);
+        
+        if (cachedId === requestId || String(cachedId).trim() === String(requestId).trim()) {
+          // Отримуємо лист для подальшої роботи
+          await doc.loadInfo();
+          const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+          if (sheet) {
+            // Перезавантажуємо рядок для актуальних даних
+            try {
+              await cachedRequest.savedRow.load();
+            } catch (error) {
+              console.warn(`⚠️ Не вдалося перезавантажити рядок з кешу:`, error);
+            }
+            
+            requestRowData = {
+              sheet: sheet,
+              row: cachedRequest.savedRow,
+              sampleIds: []
+            };
+            attempts = 1; // Встановлюємо attempts = 1, якщо знайшли в кеші
+            console.log(`✅ Використовуємо збережений рядок з кешу для заявки ${requestId}`);
+          }
+        } else {
+          console.warn(`⚠️ ID в кешованому рядку не співпадає: очікувалось ${requestId}, знайдено ${cachedId}`);
+        }
+      } catch (error) {
+        console.error(`❌ Помилка при роботі з кешованим рядком:`, error);
+        // Продовжуємо пошук в таблиці
+      }
+    }
+    
+    // Якщо не знайшли в кеші, шукаємо в таблиці з retry
+    if (!requestRowData?.row) {
+      const maxAttempts = 5; // Збільшуємо кількість спроб
+      
+      while (attempts < maxAttempts && !requestRowData?.row) {
+        if (attempts > 0) {
+          // Затримка перед повторною спробою (збільшуємо для кожної спроби)
+          await new Promise(resolve => setTimeout(resolve, 1500 * attempts));
+          console.log(`🔄 Повторна спроба знайти заявку ${requestId} (спроба ${attempts + 1}/${maxAttempts})`);
+        }
+        
+        // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
+        requestRowData = await sheetsQueue.add(async () => {
+          // Оновлюємо інформацію про документ та лист для синхронізації
+          await doc.loadInfo();
+          
+          // Спробуємо спочатку українську назву, потім англійську для сумісності
+          const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+          if (!sheet) {
+            return { sheet: null, row: null, sampleIds: [] };
+          }
+
+          // Оновлюємо клітинки листа для синхронізації
+          await sheet.loadCells();
+          
+          // Отримуємо актуальну кількість рядків
+          await sheet.loadHeaderRow();
+          
+          const result = await findVacationRowById(sheet, requestId);
+          return { sheet, ...result };
+        });
+        
+        attempts++;
+      }
+    }
+    
+    if (!requestRowData || !requestRowData.sheet) {
       await sendMessage(chatId, '❌ Помилка: Таблиця відпусток не знайдена.');
       return;
     }
     
-    // Шукаємо заявку (підтримуємо обидва формати назв колонок)
-    const rows = await sheet.getRows();
-    const requestRow = rows.find(row => {
-      const rawId = row.get('ID заявки') || row.get('RequestID') || '';
-      const normalizedId = typeof rawId === 'string' ? rawId.trim() : String(rawId).trim();
-      return normalizedId === requestId.trim();
-    });
-    
-    if (!requestRow) {
-      console.error(`❌ Заявка з ID ${requestId} не знайдена. Всього рядків: ${rows.length}`);
-      // Логуємо перші кілька ID для діагностики
-      if (rows.length > 0) {
-        const sampleIds = rows.slice(0, 5).map(r => {
-          const id = r.get('ID заявки') || r.get('RequestID') || 'N/A';
-          return id;
+    if (!requestRowData.row) {
+      console.error(`❌ Заявка з ID ${requestId} не знайдена після ${attempts} спроб`);
+      console.error(`📋 Деталі пошуку:`, {
+        requestId,
+        requestIdType: typeof requestId,
+        requestIdLength: requestId?.length,
+        normalizedRequestId: String(requestId).trim(),
+        sheetTitle: requestRowData.sheet?.title,
+        sampleIds: requestRowData.sampleIds
+      });
+      
+      if (requestRowData.sampleIds && requestRowData.sampleIds.length > 0) {
+        console.log(`📋 Приклади ID з таблиці (перші 10):`, requestRowData.sampleIds);
+        console.log(`🔍 Шукаємо ID: "${requestId}" (тип: ${typeof requestId}, довжина: ${requestId?.length})`);
+        
+        // Перевіряємо, чи є схожі ID
+        const similarIds = requestRowData.sampleIds.filter(sampleId => {
+          const sampleStr = String(sampleId);
+          const requestStr = String(requestId);
+          return sampleStr.includes(requestStr.substring(0, 10)) || 
+                 requestStr.includes(sampleStr.substring(0, 10));
         });
-        console.log(`📋 Приклади ID з таблиці:`, sampleIds);
+        
+        if (similarIds.length > 0) {
+          console.log(`🔍 Знайдено схожі ID:`, similarIds);
+        }
+        
+        requestRowData.sampleIds.slice(0, 5).forEach((sampleId, idx) => {
+          const sampleStr = String(sampleId);
+          const requestStr = String(requestId);
+          console.log(`   ${idx + 1}. "${sampleStr}" (тип: ${typeof sampleId}, довжина: ${sampleStr.length}, збіг: ${sampleStr === requestStr})`);
+        });
       }
-      await sendMessage(chatId, `❌ Заявка з ID ${requestId} не знайдена.`);
+      
+      await sendMessage(chatId, `❌ Заявка з ID ${requestId} не знайдена після ${attempts} спроб.\n\nМожливі причини:\n• Заявка ще не збереглася (спробуйте через кілька секунд)\n• Помилка синхронізації з Google Sheets\n\nСпробуйте пізніше або зверніться до техпідтримки.`);
       return;
     }
     
+    console.log(`✅ Заявка ${requestId} знайдена після ${attempts} спроб`);
+    
+    const { row: foundRow, sheet } = requestRowData;
+    const isUkrainianSheet = sheet.title === 'Відпустки';
+
     // Оновлюємо статус (підтримуємо обидва формати назв колонок)
     const newStatus = approved ? 'approved' : 'rejected';
-    const isUkrainianSheet = sheet.title === 'Відпустки';
+    const now = new Date().toISOString();
     
     if (isUkrainianSheet) {
-      requestRow.set('Статус', newStatus);
-      requestRow.set('Затверджено ким', telegramId);
-      requestRow.set('Дата затвердження', new Date().toISOString());
+      foundRow.set('Статус', newStatus);
+      if (approved) {
+        foundRow.set('Затверджено ким', telegramId);
+        foundRow.set('Дата затвердження', now);
+        foundRow.set('Відхилено ким', '');
+        foundRow.set('Причина відхилення', '');
+      } else {
+        foundRow.set('Відхилено ким', telegramId);
+        foundRow.set('Причина відхилення', ''); // Можна додати поле для причини відхилення
+        foundRow.set('Затверджено ким', '');
+        foundRow.set('Дата затвердження', '');
+      }
+      foundRow.set('Дата оновлення', now);
     } else {
-    requestRow.set('Status', newStatus);
-    requestRow.set('ApprovedBy', telegramId);
-    requestRow.set('ApprovedAt', new Date().toISOString());
+      foundRow.set('Status', newStatus);
+      if (approved) {
+        foundRow.set('ApprovedBy', telegramId);
+        foundRow.set('ApprovedAt', now);
+        foundRow.set('RejectedBy', '');
+        foundRow.set('RejectionReason', '');
+      } else {
+        foundRow.set('RejectedBy', telegramId);
+        foundRow.set('RejectionReason', ''); // Можна додати поле для причини відхилення
+        foundRow.set('ApprovedBy', '');
+        foundRow.set('ApprovedAt', '');
+      }
+      foundRow.set('UpdatedAt', now);
     }
-    await requestRow.save();
+    // Зберігаємо оновлення
+    await foundRow.save();
+    
+    // Перевіряємо, що зміни збережені
+    const savedStatus = isUkrainianSheet 
+      ? foundRow.get('Статус') 
+      : foundRow.get('Status');
+    
+    if (savedStatus !== newStatus) {
+      console.error(`❌ Помилка: статус не оновлено! Очікувалось: ${newStatus}, збережено: ${savedStatus}`);
+      // Не кидаємо помилку, але логуємо для діагностики
+    } else {
+      console.log(`✅ Статус заявки ${requestId} оновлено на "${newStatus}" та збережено в таблицю`);
+    }
     
     // Отримуємо дані заявки (підтримуємо обидва формати назв колонок)
     const getValue = (row, uaKey, enKey) => {
@@ -4497,11 +5711,11 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
       return value;
     };
     
-    const userTelegramId = parseInt(requestRow.get('TelegramID'));
-    const userFullName = getValue(requestRow, 'Ім\'я та прізвище', 'FullName');
-    const startDate = getValue(requestRow, 'Дата початку', 'StartDate');
-    const endDate = getValue(requestRow, 'Дата закінчення', 'EndDate');
-    const daysRaw = getValue(requestRow, 'Кількість днів', 'Days');
+    const userTelegramId = parseInt(foundRow.get('TelegramID'));
+    const userFullName = getValue(foundRow, 'Ім\'я та прізвище', 'FullName');
+    const startDate = getValue(foundRow, 'Дата початку', 'StartDate');
+    const endDate = getValue(foundRow, 'Дата закінчення', 'EndDate');
+    const daysRaw = getValue(foundRow, 'Кількість днів', 'Days');
     const days = parseInt(daysRaw);
     
     // Повідомляємо HR про успіх
@@ -4538,6 +5752,80 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
     console.error('❌ Помилка handleHRVacationApproval:', error);
     await sendMessage(chatId, '❌ Помилка обробки заявки. Спробуйте пізніше.');
   }
+}
+
+/**
+ * Пошук рядка заявки за ID з підтримкою великих таблиць (пагінація)
+ * @param {GoogleSpreadsheetWorksheet} sheet
+ * @param {string} requestId
+ * @returns {Promise<{row: GoogleSpreadsheetRow|null, sampleIds: string[]}>}
+ */
+async function findVacationRowById(sheet, requestId) {
+  const PAGE_SIZE = 500;
+  const normalizedId = String(requestId).trim();
+  let offset = 0;
+  let sampleIds = [];
+  let totalRowsChecked = 0;
+  
+  console.log(`🔍 findVacationRowById: шукаємо ID "${normalizedId}" (тип: ${typeof requestId})`);
+  
+  // Оновлюємо інформацію про лист перед пошуком
+  try {
+    await sheet.loadCells();
+  } catch (error) {
+    console.warn('⚠️ Не вдалося оновити клітинки листа:', error);
+  }
+  
+  while (true) {
+    // Отримуємо рядки з актуальними даними
+    const rows = await sheet.getRows({
+      offset,
+      limit: PAGE_SIZE
+    });
+    
+    if (rows.length === 0) break;
+    
+    totalRowsChecked += rows.length;
+    
+    if (offset === 0) {
+      sampleIds = rows.slice(0, 10).map(r => {
+        const id = r.get('ID заявки') || r.get('RequestID') || 'N/A';
+        return String(id).trim();
+      });
+      console.log(`📋 Перші 10 ID з таблиці:`, sampleIds);
+    }
+    
+    const foundRow = rows.find(row => {
+      const rawId = row.get('ID заявки') || row.get('RequestID') || '';
+      const normalizedRowId = String(rawId).trim();
+      
+      // Детальне порівняння
+      const matches = normalizedRowId === normalizedId;
+      
+      // Логування для перших 5 рядків першої сторінки
+      if (offset === 0 && rows.indexOf(row) < 5) {
+        console.log(`🔍 Порівняння: шукаємо="${normalizedId}", знайдено="${normalizedRowId}", збіг=${matches}`);
+      }
+      
+      return matches;
+    });
+    
+    if (foundRow) {
+      const foundId = foundRow.get('ID заявки') || foundRow.get('RequestID');
+      console.log(`✅ Заявка знайдена! ID: "${foundId}", перевірено ${totalRowsChecked} рядків`);
+      return { row: foundRow, sampleIds };
+    }
+    
+    offset += rows.length;
+    
+    // Якщо отримали менше ніж PAGE_SIZE, значить досягли кінця
+    if (rows.length < PAGE_SIZE) {
+      break;
+    }
+  }
+  
+  console.log(`❌ Заявка "${normalizedId}" не знайдена після перевірки ${totalRowsChecked} рядків`);
+  return { row: null, sampleIds };
 }
 
 // Збереження спізнення
@@ -4742,25 +6030,55 @@ async function showHRExportEmployee(chatId, telegramId) {
       return;
     }
     
+    // Показуємо підказку про inline пошук
+    const botUsername = BOT_USERNAME || process.env.BOT_USERNAME || 'your_bot';
+    const text = `👤 <b>Експорт даних по працівнику</b>\n\n` +
+      `🔍 <b>Швидкий пошук:</b> Використовуйте inline пошук для швидкого знаходження працівників:\n` +
+      `Введіть <code>@${botUsername} &lt;ім'я працівника&gt;</code> в будь-якому чаті\n\n` +
+      `Або оберіть зі списку нижче:`;
+    
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📋 Показати всіх працівників', callback_data: 'hr_export_employee_list' }
+        ]
+      ]
+    };
+    
+    addBackButton(keyboard, telegramId, 'showHRExportEmployee');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showHRExportEmployee:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження списку працівників.');
+  }
+}
+
+// 📋 Показ списку всіх працівників (для кнопки)
+async function showHRExportEmployeeList(chatId, telegramId) {
+  try {
     if (!doc) {
       await sendMessage(chatId, '❌ Google Sheets не підключено.');
       return;
     }
     
+    // Обгортаємо в чергу для запобігання rate limit
+    await sheetsQueue.add(async () => {
     await doc.loadInfo();
-    const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+      const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
     if (!employeesSheet) {
       await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
       return;
     }
     
     const rows = await employeesSheet.getRows();
-    const employees = rows.map(row => ({
-      telegramId: row.get('TelegramID'),
-      fullName: row.get('FullName'),
-      department: row.get('Department'),
-      team: row.get('Team')
-    })).filter(emp => emp.telegramId);
+      const employees = rows.map(row => {
+        const userData = mapRowToUserData(row, employeesSheet.title);
+        if (userData) {
+          // Додаємо в індекс для швидкого пошуку
+          userIndex.add(userData);
+        }
+        return userData;
+      }).filter(emp => emp && emp.telegramId);
     
     if (employees.length === 0) {
       await sendMessage(chatId, '❌ Працівники не знайдені.');
@@ -4776,8 +6094,7 @@ async function showHRExportEmployee(chatId, telegramId) {
       departments[emp.department].push(emp);
     });
     
-    let text = `👤 <b>Експорт даних по працівнику</b>\n\n`;
-    text += `Оберіть працівника:\n\n`;
+      let text = `👤 <b>Список працівників</b>\n\n`;
     
     const keyboard = {
       inline_keyboard: []
@@ -4794,23 +6111,24 @@ async function showHRExportEmployee(chatId, telegramId) {
       text += `\n`;
     });
     
-    // Додаємо кнопку "Назад"
-    addBackButton(keyboard, telegramId, 'showHRExportEmployee');
+      // Додаємо кнопку "Назад"
+      addBackButton(keyboard, telegramId, 'showHRExportEmployee');
     
     // Розбиваємо на кілька повідомлень, якщо кнопок багато
     if (keyboard.inline_keyboard.length > 10) {
       await sendMessage(chatId, text.substring(0, 4000));
       // Відправляємо кнопки окремо
       const buttonsKeyboard = {
-        inline_keyboard: keyboard.inline_keyboard.slice(0, 10)
+          inline_keyboard: keyboard.inline_keyboard.slice(0, 10)
       };
-      addBackButton(buttonsKeyboard, telegramId, 'showHRExportEmployee');
+        addBackButton(buttonsKeyboard, telegramId, 'showHRExportEmployee');
       await sendMessage(chatId, 'Оберіть працівника:', buttonsKeyboard);
     } else {
       await sendMessage(chatId, text, keyboard);
     }
+    });
   } catch (error) {
-    console.error('❌ Помилка showHRExportEmployee:', error);
+    console.error('❌ Помилка showHRExportEmployeeList:', error);
     await sendMessage(chatId, '❌ Помилка завантаження списку працівників.');
   }
 }
@@ -6046,14 +7364,128 @@ async function showHRDashboardStats(chatId, telegramId) {
   }
 }
 
+// 📥 ЗАВАНТАЖЕННЯ КОРИСТУВАЧІВ В ІНДЕКС
+/**
+ * Завантажує всіх користувачів з Google Sheets в індекс для швидкого пошуку
+ */
+async function loadUsersIntoIndex() {
+  try {
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено, пропускаємо завантаження індексу');
+      return;
+    }
+    
+    // Обгортаємо в чергу для запобігання rate limit
+    await sheetsQueue.add(async () => {
+      await doc.loadInfo();
+      const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+      if (!sheet) {
+        console.warn('⚠️ Таблиця Працівники/Employees не знайдена для завантаження індексу');
+        return;
+      }
+      
+      const rows = await sheet.getRows();
+      let loadedCount = 0;
+      
+      for (const row of rows) {
+        const userData = mapRowToUserData(row, sheet.title);
+        if (userData && userData.telegramId && userData.fullName) {
+          userIndex.add(userData);
+          loadedCount++;
+        }
+      }
+      
+      console.log(`✅ Завантажено ${loadedCount} користувачів в індекс`);
+    });
+  } catch (error) {
+    console.error('❌ Помилка завантаження користувачів в індекс:', error);
+  }
+}
+
+// 🔍 ОБРОБКА INLINE QUERY ДЛЯ ШВИДКОГО ПОШУКУ ПРАЦІВНИКІВ
+/**
+ * Обробляє inline query для швидкого пошуку працівників
+ * @param {Object} query - Inline query об'єкт від Telegram
+ */
+async function handleInlineQuery(query) {
+  try {
+    const searchTerm = (query.query || '').trim();
+    
+    // Якщо запит занадто короткий, не показуємо результати
+    if (searchTerm.length < 2) {
+      await bot.answerInlineQuery(query.id, [], {
+        cache_time: 30,
+        is_personal: false
+      });
+      return;
+    }
+    
+    // Перевіряємо роль користувача (тільки HR/CEO можуть шукати)
+    const role = await getUserRole(query.from.id);
+    if (role !== 'HR' && role !== 'CEO') {
+      await bot.answerInlineQuery(query.id, [], {
+        cache_time: 30,
+        is_personal: false
+      });
+      return;
+    }
+    
+    // Шукаємо в індексі
+    const employees = userIndex.search(searchTerm);
+    
+    // Обмежуємо до 10 результатів (Telegram обмеження)
+    const results = employees.slice(0, 10).map(emp => ({
+      type: 'article',
+      id: emp.telegramId.toString(),
+      title: emp.fullName || 'Невідомо',
+      description: `${emp.department || 'Невідомо'} / ${emp.team || 'Невідомо'}`,
+      input_message_content: {
+        message_text: `/export_employee ${emp.telegramId}`,
+        parse_mode: 'HTML'
+      }
+    }));
+    
+    await bot.answerInlineQuery(query.id, results, {
+      cache_time: 30, // Кешуємо на 30 секунд
+      is_personal: false
+    });
+    
+    console.log(`✅ Inline query оброблено: знайдено ${results.length} працівників для "${searchTerm}"`);
+  } catch (error) {
+    console.error('❌ Помилка обробки inline query:', error);
+    // Відповідаємо порожнім результатом при помилці
+    try {
+      await bot.answerInlineQuery(query.id, [], {
+        cache_time: 30,
+        is_personal: false
+      });
+    } catch (answerError) {
+      console.error('❌ Помилка відповіді на inline query:', answerError);
+    }
+  }
+}
+
 // 🚀 ЗАПУСК СЕРВЕРА
 async function startServer() {
   try {
+    // Отримуємо інформацію про бота для BOT_USERNAME
+    try {
+      const botInfo = await bot.getMe();
+      BOT_USERNAME = botInfo.username;
+      console.log(`✅ Бот ініціалізовано: @${BOT_USERNAME}`);
+    } catch (error) {
+      console.warn('⚠️ Не вдалося отримати інформацію про бота:', error.message);
+      BOT_USERNAME = process.env.BOT_USERNAME || null;
+    }
+    
     // Запуск сервера НЕБЛОКУЮЧО
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 HR Bot Ultimate запущено на порту ${PORT}`);
       console.log(`📍 Health check: http://localhost:${PORT}/`);
       console.log(`📨 Webhook: ${WEBHOOK_URL || 'не встановлено'}`);
+      if (BOT_USERNAME) {
+        console.log(`🔍 Inline пошук доступний: @${BOT_USERNAME}`);
+      }
     });
     
     // Обробка помилок сервера
@@ -6062,7 +7494,15 @@ async function startServer() {
     });
     
     // Ініціалізація Google Sheets в фоні (неблокуюче)
-    initGoogleSheets().catch(error => {
+    initGoogleSheets().then(async () => {
+      // Після успішної ініціалізації завантажуємо користувачів в індекс
+      try {
+        await loadUsersIntoIndex();
+        console.log(`✅ Завантажено ${userIndex.size()} користувачів в індекс для швидкого пошуку`);
+      } catch (error) {
+        console.warn('⚠️ Помилка завантаження користувачів в індекс:', error.message);
+      }
+    }).catch(error => {
       console.error('❌ Помилка ініціалізації Google Sheets:', error);
       console.log('🔄 Спробуємо знову через 30 секунд...');
       setTimeout(() => initGoogleSheets(), 30000);
@@ -6146,6 +7586,7 @@ module.exports = {
   processCallback,
   sendMessage,
   getUserInfo,
+  getUsersInfoBatch,
   getUserRole,
   getPMForUser,
   showMainMenu,
