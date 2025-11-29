@@ -3875,6 +3875,9 @@ async function showHRPanel(chatId, telegramId) {
           { text: '📤 Експорт даних', callback_data: 'hr_export' }
         ],
         [
+          { text: '🏖️ Подати заявку на відпустку', callback_data: 'vacation_apply' }
+        ],
+        [
           { text: '⚙️ Налаштування', callback_data: 'hr_settings' }
         ]
       ]
