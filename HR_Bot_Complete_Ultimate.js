@@ -3813,6 +3813,277 @@ async function showApprovalsMenu(chatId, telegramId) {
   }
 }
 
+// 🏖️ ЗАТВЕРДЖЕННЯ ВІДПУСТОК
+async function showApprovalVacations(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showApprovalsMenu', {});
+    
+    const role = await getUserRole(telegramId);
+    if (role !== 'PM' && role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для PM, HR, CEO.');
+      return;
+    }
+
+    // Перевірка підключення до Google Sheets
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено в showApprovalVacations, спробуємо перепідключитися...');
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        await sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до адміністратора.');
+        return;
+      }
+      console.log('✅ Google Sheets перепідключено успішно в showApprovalVacations');
+    }
+
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця відпусток не знайдена.');
+      return;
+    }
+
+    const rows = await sheet.getRows();
+    
+    // Функція для отримання значення з підтримкою обох форматів
+    const getValue = (row, uaKey, enKey) => {
+      const value = row.get(uaKey);
+      if (value === undefined || value === null || value === '') {
+        return row.get(enKey) || '';
+      }
+      return value;
+    };
+
+    // Фільтруємо заявки на затвердження
+    const pendingRequests = [];
+    const approvedHistory = [];
+    const rejectedHistory = [];
+
+    for (const row of rows) {
+      const status = getValue(row, 'Статус', 'Status') || row.get('Status') || '';
+      const statusLower = status.toLowerCase();
+      
+      if (statusLower === 'pending_hr' || statusLower === 'pending_pm' || status === 'Очікує HR' || status === 'Очікує PM') {
+        pendingRequests.push(row);
+      } else if (statusLower === 'approved' || status === 'Затверджено') {
+        approvedHistory.push(row);
+      } else if (statusLower === 'rejected' || status === 'Відхилено') {
+        rejectedHistory.push(row);
+      }
+    }
+
+    // Сортуємо за датою створення (нові спочатку)
+    pendingRequests.sort((a, b) => {
+      const dateA = getValue(a, 'Дата створення', 'CreatedAt') || '';
+      const dateB = getValue(b, 'Дата створення', 'CreatedAt') || '';
+      const dateAObj = dateA ? new Date(dateA) : new Date(0);
+      const dateBObj = dateB ? new Date(dateB) : new Date(0);
+      return dateBObj - dateAObj;
+    });
+
+    approvedHistory.sort((a, b) => {
+      const dateA = getValue(a, 'Дата затвердження', 'ApprovedDate') || '';
+      const dateB = getValue(b, 'Дата затвердження', 'ApprovedDate') || '';
+      const dateAObj = dateA ? new Date(dateA) : new Date(0);
+      const dateBObj = dateB ? new Date(dateB) : new Date(0);
+      return dateBObj - dateAObj;
+    });
+
+    // Формуємо повідомлення
+    let text = `🏖️ <b>Затвердження відпусток</b>\n\n`;
+
+    // Показуємо заявки на затвердження
+    if (pendingRequests.length > 0) {
+      text += `⏳ <b>Очікують затвердження (${pendingRequests.length}):</b>\n\n`;
+      
+      pendingRequests.slice(0, 10).forEach((row, index) => {
+        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const startDate = getValue(row, 'Дата початку', 'StartDate') || '';
+        const endDate = getValue(row, 'Дата закінчення', 'EndDate') || '';
+        const days = getValue(row, 'Кількість днів', 'Days') || '0';
+        const requestId = getValue(row, 'ID заявки', 'RequestID') || '';
+        const status = getValue(row, 'Статус', 'Status') || '';
+        const createdAt = getValue(row, 'Дата створення', 'CreatedAt') || '';
+        const requestType = getValue(row, 'Тип заявки', 'RequestType') || 'regular';
+        const department = getValue(row, 'Відділ', 'Department') || '';
+        const team = getValue(row, 'Команда', 'Team') || '';
+        
+        const statusEmoji = status.toLowerCase().includes('hr') ? '👥' : '👨‍💼';
+        const typeEmoji = requestType.toLowerCase().includes('emergency') ? '🚨' : '📝';
+        
+        text += `${index + 1}. ${typeEmoji} <b>${fullName}</b>\n`;
+        text += `   ${statusEmoji} ${status.toLowerCase().includes('hr') ? 'Очікує HR' : 'Очікує PM'}\n`;
+        text += `   📅 ${startDate} - ${endDate} (${days} днів)\n`;
+        text += `   🏢 ${department} / ${team}\n`;
+        if (createdAt) {
+          try {
+            const createdDate = new Date(createdAt);
+            if (!isNaN(createdDate.getTime())) {
+              text += `   📆 Подано: ${formatDate(createdDate)}\n`;
+            }
+          } catch (e) {
+            // Якщо дата не валідна, просто пропускаємо
+          }
+        }
+        if (requestId) {
+          text += `   🆔 ID: ${requestId.substring(0, 15)}...\n`;
+        }
+        text += `\n`;
+      });
+
+      if (pendingRequests.length > 10) {
+        text += `\n... та ще ${pendingRequests.length - 10} заявок\n\n`;
+      }
+    } else {
+      text += `✅ <b>Немає заявок на затвердження</b>\n\n`;
+    }
+
+    // Показуємо останні затверджені заявки (останні 5)
+    if (approvedHistory.length > 0) {
+      text += `✅ <b>Останні затверджені (${Math.min(5, approvedHistory.length)}):</b>\n\n`;
+      
+      approvedHistory.slice(0, 5).forEach((row, index) => {
+        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const startDate = getValue(row, 'Дата початку', 'StartDate') || '';
+        const endDate = getValue(row, 'Дата закінчення', 'EndDate') || '';
+        const approvedDate = getValue(row, 'Дата затвердження', 'ApprovedDate') || '';
+        const approvedBy = getValue(row, 'Затверджено ким', 'ApprovedBy') || '';
+        
+        text += `${index + 1}. ✅ <b>${fullName}</b>\n`;
+        text += `   📅 ${startDate} - ${endDate}\n`;
+        if (approvedDate) {
+          try {
+            const approvedDateObj = new Date(approvedDate);
+            if (!isNaN(approvedDateObj.getTime())) {
+              text += `   ✅ Затверджено: ${formatDate(approvedDateObj)}\n`;
+            }
+          } catch (e) {
+            // Якщо дата не валідна, просто пропускаємо
+          }
+        }
+        text += `\n`;
+      });
+    }
+
+    // Формуємо клавіатуру
+    const keyboard = {
+      inline_keyboard: []
+    };
+
+    // Додаємо кнопки для заявок на затвердження (якщо є)
+    if (pendingRequests.length > 0) {
+      const buttonsRow = [];
+      pendingRequests.slice(0, 3).forEach((row) => {
+        const requestId = getValue(row, 'ID заявки', 'RequestID') || '';
+        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        if (requestId) {
+          buttonsRow.push({
+            text: `✅ ${fullName.substring(0, 15)}`,
+            callback_data: `approve_vacation_${requestId}`
+          });
+        }
+      });
+      if (buttonsRow.length > 0) {
+        keyboard.inline_keyboard.push(buttonsRow);
+      }
+    }
+
+    addBackButton(keyboard, telegramId, 'showApprovalVacations');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showApprovalVacations:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження заявок. Спробуйте пізніше.');
+  }
+}
+
+// 🏠 ЗАТВЕРДЖЕННЯ REMOTE
+async function showApprovalRemote(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showApprovalsMenu', {});
+    
+    const role = await getUserRole(telegramId);
+    if (role !== 'PM' && role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для PM, HR, CEO.');
+      return;
+    }
+
+    // Перевірка підключення до Google Sheets
+    if (!doc) {
+      console.warn('⚠️ Google Sheets не підключено в showApprovalRemote, спробуємо перепідключитися...');
+      const reconnected = await initGoogleSheets();
+      if (!reconnected || !doc) {
+        await sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до адміністратора.');
+        return;
+      }
+      console.log('✅ Google Sheets перепідключено успішно в showApprovalRemote');
+    }
+
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Remotes'] || doc.sheetsByTitle['Remote'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця Remote не знайдена.');
+      return;
+    }
+
+    const rows = await sheet.getRows();
+    
+    // Функція для отримання значення
+    const getValue = (row, uaKey, enKey) => {
+      const value = row.get(uaKey);
+      if (value === undefined || value === null || value === '') {
+        return row.get(enKey) || '';
+      }
+      return value;
+    };
+
+    // Фільтруємо заявки
+    const recentRemotes = rows
+      .filter(row => {
+        const dateStr = getValue(row, 'Дата', 'Date') || '';
+        if (!dateStr) return false;
+        const date = new Date(dateStr);
+        const now = new Date();
+        const monthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+        return date >= monthAgo;
+      })
+      .sort((a, b) => {
+        const dateA = new Date(getValue(a, 'Дата', 'Date') || '');
+        const dateB = new Date(getValue(b, 'Дата', 'Date') || '');
+        return dateB - dateA;
+      })
+      .slice(0, 20);
+
+    // Формуємо повідомлення
+    let text = `🏠 <b>Remote дні</b>\n\n`;
+
+    if (recentRemotes.length > 0) {
+      text += `📊 <b>Останні Remote дні (${recentRemotes.length}):</b>\n\n`;
+      
+      recentRemotes.forEach((row, index) => {
+        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const date = getValue(row, 'Дата', 'Date') || '';
+        const department = getValue(row, 'Відділ', 'Department') || '';
+        const team = getValue(row, 'Команда', 'Team') || '';
+        
+        text += `${index + 1}. 🏠 <b>${fullName}</b>\n`;
+        text += `   📅 ${date}\n`;
+        text += `   🏢 ${department} / ${team}\n\n`;
+      });
+    } else {
+      text += `✅ <b>Немає Remote днів за останній місяць</b>\n\n`;
+    }
+
+    const keyboard = {
+      inline_keyboard: []
+    };
+
+    addBackButton(keyboard, telegramId, 'showApprovalRemote');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showApprovalRemote:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження Remote днів. Спробуйте пізніше.');
+  }
+}
+
 // 📈 МЕНЮ АНАЛІТИКИ
 async function showAnalyticsMenu(chatId, telegramId) {
   try {
