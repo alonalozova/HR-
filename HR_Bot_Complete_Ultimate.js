@@ -3797,24 +3797,24 @@ async function showApprovalsMenu(chatId, telegramId) {
     // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalsMenu: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
     
-    // Перевіряємо роль, а також якщо посада містить HR - дозволяємо доступ
-    const isHRByRole = role === 'HR';
-    const isHRByPosition = user?.position && (
-      user.position.toLowerCase().includes('hr') || 
-      user.position.toLowerCase().includes('human resources') ||
-      user.department?.toLowerCase().includes('hr')
-    );
+    // Перевіряємо роль, а також якщо посада або відділ містить HR - дозволяємо доступ
+    const roleUpper = (role || '').toUpperCase();
+    const isHRByRole = roleUpper === 'HR';
+    const isHRByPosition = user?.position && user.position.toLowerCase().includes('hr');
+    const isHRByDepartment = user?.department && user.department.toLowerCase().includes('hr');
+    const isHR = isHRByRole || isHRByPosition || isHRByDepartment;
+    const isPM = roleUpper === 'PM' || roleUpper === 'TL';
+    const isCEO = roleUpper === 'CEO';
     
-    if (role !== 'PM' && role !== 'HR' && role !== 'CEO' && !isHRByPosition) {
-      // Якщо користувач має HR посаду, але роль не встановлена - встановлюємо роль
-      if (isHRByPosition) {
-        console.log(`✅ Виявлено HR посаду для ${telegramId}, встановлюємо роль HR`);
-        await saveUserRole(telegramId, 'HR', user.position, user.department);
-        // Продовжуємо виконання
-      } else {
-        await sendMessage(chatId, `❌ Доступ обмежено. Тільки для PM, HR, CEO.\n\n🔍 Ваша роль: ${role || 'не визначено'}\n👤 Посада: ${user?.position || 'не вказано'}`);
-        return;
-      }
+    if (!isHR && !isPM && !isCEO) {
+      await sendMessage(chatId, `❌ Доступ обмежено. Тільки для PM, HR, CEO.\n\n🔍 Ваша роль: ${role || 'не визначено'}\n👤 Посада: ${user?.position || 'не вказано'}\n🏢 Відділ: ${user?.department || 'не вказано'}`);
+      return;
+    }
+    
+    // Якщо користувач має HR посаду/відділ, але роль не встановлена - встановлюємо роль
+    if ((isHRByPosition || isHRByDepartment) && !isHRByRole) {
+      console.log(`✅ Виявлено HR посаду/відділ для ${telegramId}, встановлюємо роль HR`);
+      await saveUserRole(telegramId, 'HR', user.position, user.department);
     }
 
     const text = `📋 <b>Затвердження</b>
@@ -3849,24 +3849,24 @@ async function showApprovalVacations(chatId, telegramId) {
     // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalVacations: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
     
-    // Перевіряємо роль, а також якщо посада містить HR - дозволяємо доступ
-    const isHRByRole = role === 'HR';
-    const isHRByPosition = user?.position && (
-      user.position.toLowerCase().includes('hr') || 
-      user.position.toLowerCase().includes('human resources') ||
-      user.department?.toLowerCase().includes('hr')
-    );
+    // Перевіряємо роль, а також якщо посада або відділ містить HR - дозволяємо доступ
+    const roleUpper = (role || '').toUpperCase();
+    const isHRByRole = roleUpper === 'HR';
+    const isHRByPosition = user?.position && user.position.toLowerCase().includes('hr');
+    const isHRByDepartment = user?.department && user.department.toLowerCase().includes('hr');
+    const isHR = isHRByRole || isHRByPosition || isHRByDepartment;
+    const isPM = roleUpper === 'PM' || roleUpper === 'TL';
+    const isCEO = roleUpper === 'CEO';
     
-    if (role !== 'PM' && role !== 'HR' && role !== 'CEO' && !isHRByPosition) {
-      // Якщо користувач має HR посаду, але роль не встановлена - встановлюємо роль
-      if (isHRByPosition) {
-        console.log(`✅ Виявлено HR посаду для ${telegramId}, встановлюємо роль HR`);
-        await saveUserRole(telegramId, 'HR', user.position, user.department);
-        // Продовжуємо виконання
-      } else {
-        await sendMessage(chatId, `❌ Доступ обмежено. Тільки для PM, HR, CEO.\n\n🔍 Ваша роль: ${role || 'не визначено'}\n👤 Посада: ${user?.position || 'не вказано'}`);
-        return;
-      }
+    if (!isHR && !isPM && !isCEO) {
+      await sendMessage(chatId, `❌ Доступ обмежено. Тільки для PM, HR, CEO.\n\n🔍 Ваша роль: ${role || 'не визначено'}\n👤 Посада: ${user?.position || 'не вказано'}\n🏢 Відділ: ${user?.department || 'не вказано'}`);
+      return;
+    }
+    
+    // Якщо користувач має HR посаду/відділ, але роль не встановлена - встановлюємо роль
+    if ((isHRByPosition || isHRByDepartment) && !isHRByRole) {
+      console.log(`✅ Виявлено HR посаду/відділ для ${telegramId}, встановлюємо роль HR`);
+      await saveUserRole(telegramId, 'HR', user.position, user.department);
     }
 
     // Перевірка підключення до Google Sheets
@@ -4051,24 +4051,24 @@ async function showApprovalRemote(chatId, telegramId) {
     // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalRemote: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
     
-    // Перевіряємо роль, а також якщо посада містить HR - дозволяємо доступ
-    const isHRByRole = role === 'HR';
-    const isHRByPosition = user?.position && (
-      user.position.toLowerCase().includes('hr') || 
-      user.position.toLowerCase().includes('human resources') ||
-      user.department?.toLowerCase().includes('hr')
-    );
+    // Перевіряємо роль, а також якщо посада або відділ містить HR - дозволяємо доступ
+    const roleUpper = (role || '').toUpperCase();
+    const isHRByRole = roleUpper === 'HR';
+    const isHRByPosition = user?.position && user.position.toLowerCase().includes('hr');
+    const isHRByDepartment = user?.department && user.department.toLowerCase().includes('hr');
+    const isHR = isHRByRole || isHRByPosition || isHRByDepartment;
+    const isPM = roleUpper === 'PM' || roleUpper === 'TL';
+    const isCEO = roleUpper === 'CEO';
     
-    if (role !== 'PM' && role !== 'HR' && role !== 'CEO' && !isHRByPosition) {
-      // Якщо користувач має HR посаду, але роль не встановлена - встановлюємо роль
-      if (isHRByPosition) {
-        console.log(`✅ Виявлено HR посаду для ${telegramId}, встановлюємо роль HR`);
-        await saveUserRole(telegramId, 'HR', user.position, user.department);
-        // Продовжуємо виконання
-      } else {
-        await sendMessage(chatId, `❌ Доступ обмежено. Тільки для PM, HR, CEO.\n\n🔍 Ваша роль: ${role || 'не визначено'}\n👤 Посада: ${user?.position || 'не вказано'}`);
-        return;
-      }
+    if (!isHR && !isPM && !isCEO) {
+      await sendMessage(chatId, `❌ Доступ обмежено. Тільки для PM, HR, CEO.\n\n🔍 Ваша роль: ${role || 'не визначено'}\n👤 Посада: ${user?.position || 'не вказано'}\n🏢 Відділ: ${user?.department || 'не вказано'}`);
+      return;
+    }
+    
+    // Якщо користувач має HR посаду/відділ, але роль не встановлена - встановлюємо роль
+    if ((isHRByPosition || isHRByDepartment) && !isHRByRole) {
+      console.log(`✅ Виявлено HR посаду/відділ для ${telegramId}, встановлюємо роль HR`);
+      await saveUserRole(telegramId, 'HR', user.position, user.department);
     }
 
     // Перевірка підключення до Google Sheets
