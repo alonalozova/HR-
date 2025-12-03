@@ -70,6 +70,8 @@ const logger = require('./utils/logger');
 const { messageLimiter, callbackLimiter, registrationLimiter } = require('./utils/rateLimiter');
 const { validateVacationRequest, validateRegistrationData, validateTelegramId, validateMessageText } = require('./utils/validation');
 const { getSheetValue, getSheetValueByLanguage, getTelegramId, matchesTelegramId } = require('./utils/sheetsHelpers');
+const { handleError, withErrorHandling } = require('./utils/errorHandler');
+const { batchAddRows, batchUpdateRows, getAllRowsPaginated } = require('./utils/sheetsBatch');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
 // ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
@@ -755,6 +757,9 @@ app.post('/webhook', async (req, res) => {
 
 // 📨 ОБРОБКА ПОВІДОМЛЕНЬ
 async function processMessage(message) {
+  const chatId = message?.chat?.id;
+  const telegramId = message?.from?.id;
+  
   try {
     // Перевірка наявності обов'язкових полів
     if (!message || !message.chat || !message.from) {
@@ -929,6 +934,9 @@ async function processMessage(message) {
 
 // 🔘 ОБРОБКА CALLBACK QUERY
 async function processCallback(callbackQuery) {
+  const chatId = callbackQuery?.message?.chat?.id;
+  const telegramId = callbackQuery?.from?.id;
+  
   try {
     const chatId = callbackQuery.message.chat.id;
     const telegramId = callbackQuery.from.id;
