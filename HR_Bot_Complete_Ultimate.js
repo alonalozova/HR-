@@ -66,6 +66,10 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const navigationStack = require('./utils/navigation');
 const { HybridCache } = require('./utils/cache');
+const logger = require('./utils/logger');
+const { messageLimiter, callbackLimiter, registrationLimiter } = require('./utils/rateLimiter');
+const { validateVacationRequest, validateRegistrationData, validateTelegramId, validateMessageText } = require('./utils/validation');
+const { getSheetValue, getSheetValueByLanguage, getTelegramId, matchesTelegramId } = require('./utils/sheetsHelpers');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
 // ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
@@ -102,21 +106,7 @@ class TelegramError extends AppError {
   }
 }
 
-// 📊 ЛОГЕР ДЛЯ ПОМИЛОК
-const logger = {
-  info: (message, context = {}) => {
-    console.log(`ℹ️ ${new Date().toISOString()} - ${message}`, context);
-  },
-  warn: (message, context = {}) => {
-    console.warn(`⚠️ ${new Date().toISOString()} - ${message}`, context);
-  },
-  error: (message, error = null, context = {}) => {
-    console.error(`❌ ${new Date().toISOString()} - ${message}`, error, context);
-  },
-  success: (message, context = {}) => {
-    console.log(`✅ ${new Date().toISOString()} - ${message}`, context);
-  }
-};
+// ✅ ЛОГЕР ІМПОРТОВАНО З utils/logger.js (безпечний, не логує особисті дані)
 
 // ⚙️ НАЛАШТУВАННЯ
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -779,25 +769,41 @@ async function processMessage(message) {
     const firstName = message.from.first_name;
     const lastName = message.from.last_name;
     
-    console.log(`📨 Повідомлення від ${telegramId}: ${text.substring(0, 50)}`);
+    // Rate limiting
+    if (!messageLimiter.canProceed(telegramId)) {
+      logger.warn('Rate limit exceeded for message', { telegramId });
+      await sendMessage(chatId, '⏳ Занадто багато запитів. Будь ласка, зачекайте трохи.');
+      return;
+    }
+    
+    // Валідація тексту
+    try {
+      validateMessageText(text);
+    } catch (error) {
+      logger.warn('Invalid message text', { telegramId, error: error.message });
+      await sendMessage(chatId, '❌ Невірний формат повідомлення.');
+      return;
+    }
+    
+    logger.info('Message received', { telegramId, textLength: text.length });
     
     // Перевірка на дублювання (використовуємо update_id з webhook, тут не потрібно)
     
     if (text === '/start') {
-      console.log('🟢 Обробка команди /start для користувача:', telegramId);
+      logger.info('Processing /start command', { telegramId });
       try {
         // Очищаємо кеш для перезавантаження даних з Google Sheets
         if (userCache.has(telegramId)) {
           userCache.delete(telegramId);
-          console.log(`🔄 Очищено кеш для користувача ${telegramId} перед перезавантаженням`);
+          logger.debug('Cache cleared for user', { telegramId });
         }
         
         // Завантажуємо дані користувача з Google Sheets
         const user = await getUserInfo(telegramId);
-        console.log('👤 Користувач знайдено:', user ? `так (${user.fullName || 'без імені'})` : 'ні');
+        logger.info('User lookup result', { telegramId, found: !!user, hasName: !!user?.fullName });
         
         if (!user) {
-          console.log('📝 Користувач не зареєстрований, показуємо welcome message');
+          logger.info('User not registered, showing welcome', { telegramId });
           await showWelcomeMessage(chatId, telegramId, username, firstName, lastName);
         } else {
           // Нормалізуємо дані користувача (підтримуємо обидва формати)
@@ -810,7 +816,7 @@ async function processMessage(message) {
             firstWorkDay: user.firstWorkDay || user.FirstWorkDay || ''
           };
           
-          console.log(`📋 Користувач зареєстрований: ${normalizedUser.fullName}, показуємо головне меню`);
+          logger.info('User registered, showing main menu', { telegramId, hasName: !!normalizedUser.fullName });
           
           // Перевіряємо, чи всі критичні дані на місці (ім'я, відділ, команда, посада)
           const hasAllCriticalData = normalizedUser.fullName && 
@@ -825,7 +831,7 @@ async function processMessage(message) {
             if (!normalizedUser.team) missingFields.push('команда');
             if (!normalizedUser.position) missingFields.push('посада');
             
-            console.warn(`⚠️ У користувача ${telegramId} відсутні дані: ${missingFields.join(', ')}`);
+            logger.warn('User missing some data', { telegramId, missingFields });
             await sendMessage(chatId, `⚠️ <b>Увага!</b> Деякі ваші дані відсутні в системі (${missingFields.join(', ')}). Будь ласка, зверніться до HR для оновлення реєстрації або пройдіть реєстрацію через /start`);
           }
           
@@ -928,7 +934,21 @@ async function processCallback(callbackQuery) {
     const telegramId = callbackQuery.from.id;
     const data = callbackQuery.data;
     
-    console.log(`🎛️ Callback від ${telegramId}: ${data}`);
+    // Rate limiting для callback'ів
+    if (!callbackLimiter.canProceed(telegramId)) {
+      logger.warn('Rate limit exceeded for callback', { telegramId });
+      await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳ Занадто багато запитів. Зачекайте трохи.' });
+      return;
+    }
+    
+    // Валідація callback data
+    if (!data || typeof data !== 'string' || data.length > 64) {
+      logger.warn('Invalid callback data', { telegramId, dataLength: data?.length });
+      await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Невірні дані.' });
+      return;
+    }
+    
+    logger.info('Callback received', { telegramId, callbackData: data.substring(0, 30) });
     
     await bot.answerCallbackQuery(callbackQuery.id);
     
@@ -1224,27 +1244,19 @@ async function sendMessage(chatId, text, keyboard = null) {
 function mapRowToUserData(row, sheetTitle) {
   if (!row) return null;
   
-  const rawTelegramId = row.get('TelegramID');
-  if (!rawTelegramId) return null;
-
-  const parsedTelegramId = parseInt(rawTelegramId, 10);
-  const normalizedTelegramId = Number.isNaN(parsedTelegramId)
-    ? rawTelegramId.toString()
-    : parsedTelegramId;
-
-  const isUkrainianSheet = sheetTitle === 'Працівники';
-  const getValue = (uaKey, enKey) => row.get(isUkrainianSheet ? uaKey : enKey) || row.get(enKey) || row.get(uaKey) || '';
+  const telegramId = getTelegramId(row);
+  if (!telegramId) return null;
 
   return {
-    telegramId: normalizedTelegramId,
-    fullName: getValue('Ім\'я та прізвище', 'FullName'),
-    department: getValue('Відділ', 'Department'),
-    team: getValue('Команда', 'Team'),
-    position: getValue('Посада', 'Position'),
-    birthDate: getValue('Дата народження', 'BirthDate'),
-    firstWorkDay: getValue('Перший робочий день', 'FirstWorkDay'),
-    workMode: getValue('Режим роботи', 'WorkMode') || 'Hybrid',
-    pm: row.get('PM') || null
+    telegramId: telegramId,
+    fullName: getSheetValueByLanguage(row, sheetTitle, 'Ім\'я та прізвище', 'FullName'),
+    department: getSheetValueByLanguage(row, sheetTitle, 'Відділ', 'Department'),
+    team: getSheetValueByLanguage(row, sheetTitle, 'Команда', 'Team'),
+    position: getSheetValueByLanguage(row, sheetTitle, 'Посада', 'Position'),
+    birthDate: getSheetValueByLanguage(row, sheetTitle, 'Дата народження', 'BirthDate'),
+    firstWorkDay: getSheetValueByLanguage(row, sheetTitle, 'Перший робочий день', 'FirstWorkDay'),
+    workMode: getSheetValueByLanguage(row, sheetTitle, 'Режим роботи', 'WorkMode', 'Hybrid'),
+    pm: getSheetValue(row, 'PM', 'PM') || null
   };
 }
 
@@ -2458,18 +2470,26 @@ async function importWorkStartDates(workStartData) {
 // ✅ ЗАВЕРШЕННЯ РЕЄСТРАЦІЇ
 async function completeRegistration(chatId, telegramId, data) {
   try {
-    // Перевіряємо, чи всі обов'язкові дані наявні
-    if (!data.name || !data.surname || !data.department || !data.team || !data.position || !data.birthDate || !data.firstWorkDay) {
-      console.error(`❌ Неповні дані реєстрації для ${telegramId}:`, data);
-      await sendMessage(chatId, '❌ Помилка: не всі дані заповнені. Будь ласка, почніть реєстрацію спочатку через /start');
+    // Rate limiting для реєстрації
+    if (!registrationLimiter.canProceed(telegramId)) {
+      logger.warn('Rate limit exceeded for registration', { telegramId });
+      await sendMessage(chatId, '⏳ Занадто багато спроб реєстрації. Будь ласка, зачекайте 5 хвилин.');
+      return;
+    }
+    
+    // Валідація даних реєстрації
+    try {
+      validateRegistrationData(data);
+      validateTelegramId(telegramId);
+    } catch (error) {
+      logger.warn('Registration validation failed', { telegramId, error: error.message });
+      await sendMessage(chatId, `❌ ${error.message}. Будь ласка, почніть реєстрацію спочатку через /start`);
       return;
     }
     
     const fullName = `${data.name} ${data.surname}`;
     
-    console.log(`📝 Завершення реєстрації для ${telegramId}:`);
-    console.log(`   Ім'я: ${fullName}`);
-    console.log(`   Відділ: ${data.department}`);
+    logger.info('Completing registration', { telegramId, department: data.department, team: data.team, position: data.position });
     console.log(`   Команда: ${data.team}`);
     console.log(`   Посада: ${data.position}`);
     console.log(`   Дата народження: ${data.birthDate}`);
@@ -2805,24 +2825,10 @@ async function showMyVacationRequests(chatId, telegramId, page = 0) {
     
     const rows = await sheet.getRows();
       
-      // Підтримуємо обидва формати назв колонок
-      const isUkrainianSheet = sheet.title === 'Відпустки';
-      const getValue = (row, uaKey, enKey) => {
-        const value = isUkrainianSheet ? row.get(uaKey) : row.get(enKey);
-        if (value === undefined || value === null || value === '') {
-          const fallback = isUkrainianSheet ? row.get(enKey) : row.get(uaKey);
-          return fallback;
-        }
-        return value;
-      };
-      
     const userRequests = rows
-        .filter(row => {
-          const rowTelegramId = row.get('TelegramID');
-          return rowTelegramId == telegramId;
-        })
+        .filter(row => matchesTelegramId(row, telegramId))
         .map(row => {
-          const startDateStr = getValue(row, 'Дата початку', 'StartDate');
+          const startDateStr = getSheetValueByLanguage(row, sheet.title, 'Дата початку', 'StartDate');
           const startDate = startDateStr ? new Date(startDateStr) : new Date(0);
           return { row, startDate };
         })
@@ -2846,12 +2852,12 @@ async function showMyVacationRequests(chatId, telegramId, page = 0) {
       
       pageRequests.forEach((row, index) => {
         const globalIndex = start + index + 1;
-        const status = getValue(row, 'Статус', 'Status');
-        const startDate = getValue(row, 'Дата початку', 'StartDate');
-        const endDate = getValue(row, 'Дата закінчення', 'EndDate');
-        const days = getValue(row, 'Кількість днів', 'Days');
-        const requestType = getValue(row, 'Тип заявки', 'RequestType') || 'regular';
-        const requestId = getValue(row, 'ID заявки', 'RequestID') || '';
+        const status = getSheetValueByLanguage(row, sheet.title, 'Статус', 'Status');
+        const startDate = getSheetValueByLanguage(row, sheet.title, 'Дата початку', 'StartDate');
+        const endDate = getSheetValueByLanguage(row, sheet.title, 'Дата закінчення', 'EndDate');
+        const days = getSheetValueByLanguage(row, sheet.title, 'Кількість днів', 'Days');
+        const requestType = getSheetValueByLanguage(row, sheet.title, 'Тип заявки', 'RequestType', 'regular');
+        const requestId = getSheetValueByLanguage(row, sheet.title, 'ID заявки', 'RequestID') || '';
       
       let statusEmoji = '⏳';
       let statusText = 'Очікує';
@@ -4062,22 +4068,13 @@ async function showApprovalVacations(chatId, telegramId) {
 
     const rows = await sheet.getRows();
     
-    // Функція для отримання значення з підтримкою обох форматів
-    const getValue = (row, uaKey, enKey) => {
-      const value = row.get(uaKey);
-      if (value === undefined || value === null || value === '') {
-        return row.get(enKey) || '';
-      }
-      return value;
-    };
-
     // Фільтруємо заявки на затвердження
     const pendingRequests = [];
     const approvedHistory = [];
     const rejectedHistory = [];
 
     for (const row of rows) {
-      const status = getValue(row, 'Статус', 'Status') || row.get('Status') || '';
+      const status = getSheetValue(row, 'Статус', 'Status') || row.get('Status') || '';
       const statusLower = status.toLowerCase();
       
       if (statusLower === 'pending_hr' || statusLower === 'pending_pm' || status === 'Очікує HR' || status === 'Очікує PM') {
@@ -4114,16 +4111,16 @@ async function showApprovalVacations(chatId, telegramId) {
       text += `⏳ <b>Очікують затвердження (${pendingRequests.length}):</b>\n\n`;
       
       pendingRequests.slice(0, 10).forEach((row, index) => {
-        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
-        const startDate = getValue(row, 'Дата початку', 'StartDate') || '';
-        const endDate = getValue(row, 'Дата закінчення', 'EndDate') || '';
-        const days = getValue(row, 'Кількість днів', 'Days') || '0';
-        const requestId = getValue(row, 'ID заявки', 'RequestID') || '';
-        const status = getValue(row, 'Статус', 'Status') || '';
-        const createdAt = getValue(row, 'Дата створення', 'CreatedAt') || '';
-        const requestType = getValue(row, 'Тип заявки', 'RequestType') || 'regular';
-        const department = getValue(row, 'Відділ', 'Department') || '';
-        const team = getValue(row, 'Команда', 'Team') || '';
+        const fullName = getSheetValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const startDate = getSheetValue(row, 'Дата початку', 'StartDate') || '';
+        const endDate = getSheetValue(row, 'Дата закінчення', 'EndDate') || '';
+        const days = getSheetValue(row, 'Кількість днів', 'Days') || '0';
+        const requestId = getSheetValue(row, 'ID заявки', 'RequestID') || '';
+        const status = getSheetValue(row, 'Статус', 'Status') || '';
+        const createdAt = getSheetValue(row, 'Дата створення', 'CreatedAt') || '';
+        const requestType = getSheetValue(row, 'Тип заявки', 'RequestType') || 'regular';
+        const department = getSheetValue(row, 'Відділ', 'Department') || '';
+        const team = getSheetValue(row, 'Команда', 'Team') || '';
         
         const statusEmoji = status.toLowerCase().includes('hr') ? '👥' : '👨‍💼';
         const typeEmoji = requestType.toLowerCase().includes('emergency') ? '🚨' : '📝';
@@ -4160,11 +4157,11 @@ async function showApprovalVacations(chatId, telegramId) {
       text += `✅ <b>Останні затверджені (${Math.min(5, approvedHistory.length)}):</b>\n\n`;
       
       approvedHistory.slice(0, 5).forEach((row, index) => {
-        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
-        const startDate = getValue(row, 'Дата початку', 'StartDate') || '';
-        const endDate = getValue(row, 'Дата закінчення', 'EndDate') || '';
-        const approvedDate = getValue(row, 'Дата затвердження', 'ApprovedDate') || '';
-        const approvedBy = getValue(row, 'Затверджено ким', 'ApprovedBy') || '';
+        const fullName = getSheetValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const startDate = getSheetValue(row, 'Дата початку', 'StartDate') || '';
+        const endDate = getSheetValue(row, 'Дата закінчення', 'EndDate') || '';
+        const approvedDate = getSheetValue(row, 'Дата затвердження', 'ApprovedDate') || '';
+        const approvedBy = getSheetValue(row, 'Затверджено ким', 'ApprovedBy') || '';
         
         text += `${index + 1}. ✅ <b>${fullName}</b>\n`;
         text += `   📅 ${startDate} - ${endDate}\n`;
@@ -4193,10 +4190,10 @@ async function showApprovalVacations(chatId, telegramId) {
       const requestsToShow = pendingRequests.slice(0, 10);
       
       requestsToShow.forEach((row) => {
-        const requestId = getValue(row, 'ID заявки', 'RequestID') || '';
-        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
-        const startDate = getValue(row, 'Дата початку', 'StartDate') || '';
-        const days = getValue(row, 'Кількість днів', 'Days') || '0';
+        const requestId = getSheetValue(row, 'ID заявки', 'RequestID') || '';
+        const fullName = getSheetValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const startDate = getSheetValue(row, 'Дата початку', 'StartDate') || '';
+        const days = getSheetValue(row, 'Кількість днів', 'Days') || '0';
         
         if (requestId) {
           // Кнопка для перегляду деталей заявки
@@ -4291,19 +4288,10 @@ async function showApprovalRemote(chatId, telegramId) {
 
     const rows = await sheet.getRows();
     
-    // Функція для отримання значення
-    const getValue = (row, uaKey, enKey) => {
-      const value = row.get(uaKey);
-      if (value === undefined || value === null || value === '') {
-        return row.get(enKey) || '';
-      }
-      return value;
-    };
-
     // Фільтруємо заявки
     const recentRemotes = rows
       .filter(row => {
-        const dateStr = getValue(row, 'Дата', 'Date') || '';
+        const dateStr = getSheetValue(row, 'Дата', 'Date') || '';
         if (!dateStr) return false;
         const date = new Date(dateStr);
         const now = new Date();
@@ -4311,8 +4299,8 @@ async function showApprovalRemote(chatId, telegramId) {
         return date >= monthAgo;
       })
       .sort((a, b) => {
-        const dateA = new Date(getValue(a, 'Дата', 'Date') || '');
-        const dateB = new Date(getValue(b, 'Дата', 'Date') || '');
+        const dateA = new Date(getSheetValue(a, 'Дата', 'Date') || '');
+        const dateB = new Date(getSheetValue(b, 'Дата', 'Date') || '');
         return dateB - dateA;
       })
       .slice(0, 20);
@@ -4324,10 +4312,10 @@ async function showApprovalRemote(chatId, telegramId) {
       text += `📊 <b>Останні Remote дні (${recentRemotes.length}):</b>\n\n`;
       
       recentRemotes.forEach((row, index) => {
-        const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
-        const date = getValue(row, 'Дата', 'Date') || '';
-        const department = getValue(row, 'Відділ', 'Department') || '';
-        const team = getValue(row, 'Команда', 'Team') || '';
+        const fullName = getSheetValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const date = getSheetValue(row, 'Дата', 'Date') || '';
+        const department = getSheetValue(row, 'Відділ', 'Department') || '';
+        const team = getSheetValue(row, 'Команда', 'Team') || '';
         
         text += `${index + 1}. 🏠 <b>${fullName}</b>\n`;
         text += `   📅 ${date}\n`;
@@ -5368,21 +5356,30 @@ async function processEmergencyVacationRequest(chatId, telegramId, vacationData)
  */
 async function processVacationRequest(chatId, telegramId, vacationData) {
   try {
-    logger.info('Processing vacation request', { telegramId, vacationData });
+    // Валідація даних заявки
+    try {
+      validateVacationRequest(vacationData);
+      validateTelegramId(telegramId);
+    } catch (error) {
+      logger.warn('Vacation request validation failed', { telegramId, error: error.message });
+      throw error;
+    }
+    
+    logger.info('Processing vacation request', { telegramId });
     
     // Отримуємо дані користувача з обов'язковою перевіркою
     let user = await getUserInfo(telegramId);
     
     // Якщо не знайдено, спробуємо ще раз з очищенням кешу
     if (!user) {
-      console.warn(`⚠️ Користувач ${telegramId} не знайдено, очищаємо кеш та шукаємо знову...`);
+      logger.warn('User not found, clearing cache and retrying', { telegramId });
       userCache.delete(telegramId);
       await new Promise(resolve => setTimeout(resolve, 500)); // Невелика затримка
       user = await getUserInfo(telegramId);
     }
     
     if (!user) {
-      console.error(`❌ КРИТИЧНА ПОМИЛКА: Користувач ${telegramId} не знайдено після повторного пошуку`);
+      logger.error('User not found after retry', null, { telegramId });
       throw new ValidationError(`Ваші дані не знайдені в системі. Будь ласка, зверніться до HR для перевірки реєстрації або пройдіть реєстрацію через /start`, 'user_data_missing');
     }
     
@@ -6300,21 +6297,12 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
       console.log(`✅ Статус заявки ${requestId} оновлено на "${newStatus}" та збережено в таблицю`);
     }
     
-    // Отримуємо дані заявки (підтримуємо обидва формати назв колонок)
-    const getValue = (row, uaKey, enKey) => {
-      const value = isUkrainianSheet ? row.get(uaKey) : row.get(enKey);
-      if (value === undefined || value === null || value === '') {
-        const fallback = isUkrainianSheet ? row.get(enKey) : row.get(uaKey);
-        return fallback;
-      }
-      return value;
-    };
-    
-    const userTelegramId = parseInt(foundRow.get('TelegramID'));
-    const userFullName = getValue(foundRow, 'Ім\'я та прізвище', 'FullName');
-    const startDate = getValue(foundRow, 'Дата початку', 'StartDate');
-    const endDate = getValue(foundRow, 'Дата закінчення', 'EndDate');
-    const daysRaw = getValue(foundRow, 'Кількість днів', 'Days');
+    // Отримуємо дані заявки
+    const userTelegramId = getTelegramId(foundRow);
+    const userFullName = getSheetValueByLanguage(foundRow, sheet.title, 'Ім\'я та прізвище', 'FullName');
+    const startDate = getSheetValueByLanguage(foundRow, sheet.title, 'Дата початку', 'StartDate');
+    const endDate = getSheetValueByLanguage(foundRow, sheet.title, 'Дата закінчення', 'EndDate');
+    const daysRaw = getSheetValueByLanguage(foundRow, sheet.title, 'Кількість днів', 'Days');
     const days = parseInt(daysRaw);
     
     // Повідомляємо HR про успіх
@@ -6379,16 +6367,9 @@ async function showVacationRequestDetails(chatId, telegramId, requestId) {
     }
     
     const rows = await sheet.getRows();
-    const getValue = (row, uaKey, enKey) => {
-      const value = row.get(uaKey);
-      if (value === undefined || value === null || value === '') {
-        return row.get(enKey) || '';
-      }
-      return value;
-    };
     
     const requestRow = rows.find(row => {
-      const rowId = getValue(row, 'ID заявки', 'RequestID') || '';
+      const rowId = getSheetValueByLanguage(row, sheet.title, 'ID заявки', 'RequestID') || '';
       return rowId === requestId || String(rowId).trim() === String(requestId).trim();
     });
     
@@ -6397,18 +6378,18 @@ async function showVacationRequestDetails(chatId, telegramId, requestId) {
       return;
     }
     
-    const fullName = getValue(requestRow, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
-    const startDate = getValue(requestRow, 'Дата початку', 'StartDate') || '';
-    const endDate = getValue(requestRow, 'Дата закінчення', 'EndDate') || '';
-    const days = getValue(requestRow, 'Кількість днів', 'Days') || '0';
-    const status = getValue(requestRow, 'Статус', 'Status') || '';
-    const department = getValue(requestRow, 'Відділ', 'Department') || '';
-    const team = getValue(requestRow, 'Команда', 'Team') || '';
-    const requestType = getValue(requestRow, 'Тип заявки', 'RequestType') || 'regular';
-    const reason = getValue(requestRow, 'Причина', 'Reason') || '';
-    const createdAt = getValue(requestRow, 'Дата створення', 'CreatedAt') || '';
-    const balanceBefore = getValue(requestRow, 'Баланс до', 'BalanceBefore') || '';
-    const balanceAfter = getValue(requestRow, 'Баланс після', 'BalanceAfter') || '';
+    const fullName = getSheetValueByLanguage(requestRow, sheet.title, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+    const startDate = getSheetValueByLanguage(requestRow, sheet.title, 'Дата початку', 'StartDate') || '';
+    const endDate = getSheetValueByLanguage(requestRow, sheet.title, 'Дата закінчення', 'EndDate') || '';
+    const days = getSheetValueByLanguage(requestRow, sheet.title, 'Кількість днів', 'Days') || '0';
+    const status = getSheetValueByLanguage(requestRow, sheet.title, 'Статус', 'Status') || '';
+    const department = getSheetValueByLanguage(requestRow, sheet.title, 'Відділ', 'Department') || '';
+    const team = getSheetValueByLanguage(requestRow, sheet.title, 'Команда', 'Team') || '';
+    const requestType = getSheetValueByLanguage(requestRow, sheet.title, 'Тип заявки', 'RequestType', 'regular');
+    const reason = getSheetValueByLanguage(requestRow, sheet.title, 'Причина', 'Reason') || '';
+    const createdAt = getSheetValueByLanguage(requestRow, sheet.title, 'Дата створення', 'CreatedAt') || '';
+    const balanceBefore = getSheetValueByLanguage(requestRow, sheet.title, 'Баланс до', 'BalanceBefore') || '';
+    const balanceAfter = getSheetValueByLanguage(requestRow, sheet.title, 'Баланс після', 'BalanceAfter') || '';
     
     let text = `📋 <b>Деталі заявки на відпустку</b>\n\n`;
     text += `🆔 <b>ID:</b> ${requestId}\n`;
