@@ -2152,6 +2152,7 @@ async function handleDepartmentSelection(chatId, telegramId, department) {
 
     regData.data.department = department;
     regData.step = 'team';
+    registrationCache.set(telegramId, regData); // Зберігаємо зміни
 
     const keyboard = { inline_keyboard: [] };
     
@@ -2234,6 +2235,7 @@ async function handlePositionSelection(chatId, telegramId, position) {
 
     regData.data.position = position;
     regData.step = 'name';
+    registrationCache.set(telegramId, regData); // Зберігаємо зміни
 
     await sendMessage(chatId, `✅ Посада: <b>${position}</b>\n\n📝 Введіть ваше ім'я:`);
   } catch (error) {
