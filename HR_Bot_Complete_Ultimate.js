@@ -786,13 +786,26 @@ async function processMessage(message) {
     if (text === '/start') {
       console.log('🟢 Обробка команди /start для користувача:', telegramId);
       try {
+        // Очищаємо кеш для перезавантаження даних з Google Sheets
+        if (userCache.has(telegramId)) {
+          userCache.delete(telegramId);
+          console.log(`🔄 Очищено кеш для користувача ${telegramId} перед перезавантаженням`);
+        }
+        
+        // Завантажуємо дані користувача з Google Sheets
         const user = await getUserInfo(telegramId);
-        console.log('👤 Користувач знайдено:', user ? 'так' : 'ні');
+        console.log('👤 Користувач знайдено:', user ? `так (${user.fullName || 'без імені'})` : 'ні');
+        
         if (!user) {
-          console.log('📝 Показуємо welcome message');
+          console.log('📝 Користувач не зареєстрований, показуємо welcome message');
           await showWelcomeMessage(chatId, telegramId, username, firstName, lastName);
         } else {
-          console.log('📋 Показуємо головне меню');
+          console.log(`📋 Користувач зареєстрований: ${user.fullName}, показуємо головне меню`);
+          // Перевіряємо, чи всі дані на місці
+          if (!user.fullName || !user.department || !user.team || !user.position) {
+            console.warn(`⚠️ У користувача ${telegramId} відсутні деякі дані. Повна реєстрація: ${!!user.fullName && !!user.department && !!user.team && !!user.position}`);
+            await sendMessage(chatId, `⚠️ <b>Увага!</b> Деякі ваші дані відсутні в системі. Будь ласка, зверніться до HR для оновлення реєстрації.`);
+          }
           await showMainMenu(chatId, telegramId);
         }
       } catch (error) {
@@ -2412,7 +2425,22 @@ async function importWorkStartDates(workStartData) {
 // ✅ ЗАВЕРШЕННЯ РЕЄСТРАЦІЇ
 async function completeRegistration(chatId, telegramId, data) {
   try {
+    // Перевіряємо, чи всі обов'язкові дані наявні
+    if (!data.name || !data.surname || !data.department || !data.team || !data.position || !data.birthDate || !data.firstWorkDay) {
+      console.error(`❌ Неповні дані реєстрації для ${telegramId}:`, data);
+      await sendMessage(chatId, '❌ Помилка: не всі дані заповнені. Будь ласка, почніть реєстрацію спочатку через /start');
+      return;
+    }
+    
     const fullName = `${data.name} ${data.surname}`;
+    
+    console.log(`📝 Завершення реєстрації для ${telegramId}:`);
+    console.log(`   Ім'я: ${fullName}`);
+    console.log(`   Відділ: ${data.department}`);
+    console.log(`   Команда: ${data.team}`);
+    console.log(`   Посада: ${data.position}`);
+    console.log(`   Дата народження: ${data.birthDate}`);
+    console.log(`   Перший робочий день: ${data.firstWorkDay}`);
     
     // Створюємо об'єкт користувача для кешу
     const userData = {
@@ -2559,6 +2587,19 @@ async function completeRegistration(chatId, telegramId, data) {
       console.log(`✅ Підтверджено: користувач ${telegramId} (${verifyUser.fullName}) знайдено в системі`);
     }
 
+    // Показуємо повідомлення про успішну реєстрацію
+    const successMessage = `🎉 <b>Реєстрацію завершено успішно!</b>\n\n` +
+      `👤 <b>Ім'я:</b> ${fullName}\n` +
+      `🏢 <b>Відділ:</b> ${data.department}\n` +
+      `👥 <b>Команда:</b> ${data.team}\n` +
+      `💼 <b>Посада:</b> ${data.position}\n` +
+      `📅 <b>Дата народження:</b> ${data.birthDate}\n` +
+      `📅 <b>Перший робочий день:</b> ${data.firstWorkDay}\n\n` +
+      `✅ Всі ваші дані збережені в системі.\n` +
+      `Тепер ви можете користуватися всіма функціями бота!`;
+    
+    await sendMessage(chatId, successMessage);
+    
     // Показуємо головне меню з персоналізованим привітанням
     await showMainMenu(chatId, telegramId);
   } catch (error) {
