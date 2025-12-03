@@ -1887,7 +1887,31 @@ async function showMainMenu(chatId, telegramId) {
     ]);
     
     // Отримуємо ім'я користувача для персоналізованого привітання
-    const userName = user?.fullName || 'колега';
+    let userName = user?.fullName;
+    
+    // Якщо ім'я не знайдено в базі, спробуємо отримати з Telegram
+    if (!userName || userName.trim() === '') {
+      try {
+        const chatMember = await bot.getChatMember(chatId, telegramId);
+        if (chatMember && chatMember.user) {
+          const firstName = chatMember.user.first_name || '';
+          const lastName = chatMember.user.last_name || '';
+          userName = firstName && lastName 
+            ? `${firstName} ${lastName}` 
+            : firstName || lastName || 'колега';
+        } else {
+          userName = 'колега';
+        }
+      } catch (error) {
+        console.warn(`⚠️ Не вдалося отримати ім'я з Telegram для ${telegramId}:`, error);
+        userName = 'колега';
+      }
+    }
+    
+    // Якщо все ще немає імені, використовуємо за замовчуванням
+    if (!userName || userName.trim() === '') {
+      userName = 'колега';
+    }
     
     // Базові пункти меню для всіх (з пріоритетами)
     const baseMenuItems = [
