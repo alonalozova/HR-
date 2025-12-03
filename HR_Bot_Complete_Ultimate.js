@@ -814,6 +814,28 @@ async function processMessage(message) {
       return;
     }
     
+    // Команда /myrole для перевірки поточної ролі
+    if (text === '/myrole' || text === '/myrole@' + (process.env.BOT_USERNAME || '')) {
+      const role = await getUserRole(telegramId);
+      const user = await getUserInfo(telegramId);
+      const roleNames = {
+        'HR': 'HR',
+        'CEO': 'CEO',
+        'TL': 'Team Lead',
+        'PM': 'Project Manager',
+        'EMP': 'Працівник'
+      };
+      const roleName = roleNames[role] || role || 'не визначено';
+      const msg = `🔍 <b>Ваша поточна роль:</b> ${roleName}\n\n` +
+        `👤 Посада: ${user?.position || 'не вказано'}\n` +
+        `🏢 Відділ: ${user?.department || 'не вказано'}\n\n` +
+        `💡 <b>Якщо роль невірна:</b>\n` +
+        `1. Перевірте, чи ваша посада або відділ містить "HR"\n` +
+        `2. Якщо ви HR, але роль не визначена, зверніться до адміністратора`;
+      await sendMessage(chatId, msg);
+      return;
+    }
+    
     // Обробка Reply Keyboard кнопок
     if (await handleReplyKeyboard(chatId, telegramId, text)) {
       return;
@@ -1379,10 +1401,10 @@ async function getUsersInfoBatch(telegramIds = []) {
 async function getUserRole(telegramId) {
   try {
     if (!doc) {
-      // Якщо Google Sheets не підключено, спробуємо визначити роль за посадою з кешу
+      // Якщо Google Sheets не підключено, спробуємо визначити роль за посадою та відділом з кешу
       const user = userCache.get(telegramId);
-      if (user && user.position) {
-        return determineRoleByPosition(user.position);
+      if (user) {
+        return determineRoleByPositionAndDepartment(user.position, user.department);
       }
       return 'EMP';
     }
@@ -1406,10 +1428,10 @@ async function getUserRole(telegramId) {
       return roleRow.get('Role') || 'EMP';
     }
     
-    // Якщо ролі немає в таблиці, спробуємо визначити за посадою
+    // Якщо ролі немає в таблиці, спробуємо визначити за посадою та відділом
     const user = await getUserInfo(telegramId);
-    if (user && user.position) {
-      const determinedRole = determineRoleByPosition(user.position);
+    if (user) {
+      const determinedRole = determineRoleByPositionAndDepartment(user.position, user.department);
       // Зберігаємо визначену роль в таблицю
       await saveUserRole(telegramId, determinedRole, user.position, user.department);
       return determinedRole;
@@ -1441,6 +1463,45 @@ function determineRoleByPosition(position) {
       posLower.includes('hr coordinator') ||
       posLower.includes('кадр') ||
       posLower.includes('персонал')) {
+    return 'HR';
+  }
+  
+  // Team Lead
+  if (posLower.includes('team lead') || posLower.includes('teamlead') || 
+      posLower.includes('lead') || posLower.includes('керівник')) {
+    return 'TL';
+  }
+  
+  // За замовчуванням - працівник
+  return 'EMP';
+}
+
+// 🔍 ВИЗНАЧЕННЯ РОЛІ ЗА ПОСАДОЮ ТА ВІДДІЛОМ
+function determineRoleByPositionAndDepartment(position, department) {
+  if (!position && !department) return 'EMP';
+  
+  const posLower = (position || '').toLowerCase();
+  const deptLower = (department || '').toLowerCase();
+  
+  // CEO
+  if (posLower.includes('ceo') || posLower.includes('founder') || posLower.includes('засновник')) {
+    return 'CEO';
+  }
+  
+  // HR - перевірка посади та відділу
+  const isHRByPosition = posLower.includes('hr') || 
+      posLower.includes('human resources') ||
+      posLower.includes('hr manager') ||
+      posLower.includes('hr specialist') ||
+      posLower.includes('hr coordinator') ||
+      posLower.includes('кадр') ||
+      posLower.includes('персонал');
+  
+  const isHRByDepartment = deptLower.includes('hr') || 
+      deptLower.includes('human resources') ||
+      deptLower === 'hr';
+  
+  if (isHRByPosition || isHRByDepartment) {
     return 'HR';
   }
   
@@ -2388,10 +2449,10 @@ async function completeRegistration(chatId, telegramId, data) {
         console.log(`✅ Додано користувача ${telegramId} (${fullName}) в Google Sheets`);
       }
       
-      // 3. Визначаємо та зберігаємо роль на основі посади
-      const determinedRole = determineRoleByPosition(data.position);
+      // 3. Визначаємо та зберігаємо роль на основі посади та відділу
+      const determinedRole = determineRoleByPositionAndDepartment(data.position, data.department);
       await saveUserRole(telegramId, determinedRole, data.position, data.department);
-      console.log(`✅ Визначено роль для ${telegramId}: ${determinedRole} (на основі посади: ${data.position})`);
+      console.log(`✅ Визначено роль для ${telegramId}: ${determinedRole} (на основі посади: ${data.position}, відділ: ${data.department})`);
       
       // 2. Зберігаємо в "Дати початку роботи" та прив'язуємо існуючі записи
       let workStartSheet = doc.sheetsByTitle['Дати початку роботи'];
@@ -4190,9 +4251,18 @@ async function showHRPanel(chatId, telegramId) {
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
     const role = await getUserRole(telegramId);
+    const user = await getUserInfo(telegramId);
     
     if (role !== 'HR') {
-      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      const diagnosticMsg = `❌ Доступ обмежено. Тільки для HR.\n\n` +
+        `🔍 <b>Діагностика:</b>\n` +
+        `👤 Ваша роль: <b>${role || 'не визначено'}</b>\n` +
+        `💼 Посада: ${user?.position || 'не вказано'}\n` +
+        `🏢 Відділ: ${user?.department || 'не вказано'}\n\n` +
+        `💡 <b>Якщо ви HR:</b>\n` +
+        `1. Перевірте, чи ваша посада містить "HR", "Human Resources", "кадр" або "персонал"\n` +
+        `2. Якщо ні, зверніться до адміністратора для встановлення ролі вручну`;
+      await sendMessage(chatId, diagnosticMsg);
       return;
     }
 
@@ -4269,9 +4339,16 @@ async function showCEOPanel(chatId, telegramId) {
 async function showMailingsMenu(chatId, telegramId) {
   try {
     const role = await getUserRole(telegramId);
+    const user = await getUserInfo(telegramId);
     
     if (role !== 'HR') {
-      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      const diagnosticMsg = `❌ Доступ обмежено. Тільки для HR.\n\n` +
+        `🔍 <b>Діагностика:</b>\n` +
+        `👤 Ваша роль: <b>${role || 'не визначено'}</b>\n` +
+        `💼 Посада: ${user?.position || 'не вказано'}\n` +
+        `🏢 Відділ: ${user?.department || 'не вказано'}\n\n` +
+        `💡 Використайте команду /myrole для детальної інформації`;
+      await sendMessage(chatId, diagnosticMsg);
       return;
     }
 

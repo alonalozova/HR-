@@ -1,5 +1,5 @@
 {
   "deploy": {
-    "startCommand": "node app.js"
+    "startCommand": "node HR_Bot_Complete_Ultimate.js"
   }
 }
