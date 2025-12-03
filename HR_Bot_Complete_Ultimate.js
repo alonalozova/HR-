@@ -800,12 +800,35 @@ async function processMessage(message) {
           console.log('📝 Користувач не зареєстрований, показуємо welcome message');
           await showWelcomeMessage(chatId, telegramId, username, firstName, lastName);
         } else {
-          console.log(`📋 Користувач зареєстрований: ${user.fullName}, показуємо головне меню`);
-          // Перевіряємо, чи всі дані на місці
-          if (!user.fullName || !user.department || !user.team || !user.position) {
-            console.warn(`⚠️ У користувача ${telegramId} відсутні деякі дані. Повна реєстрація: ${!!user.fullName && !!user.department && !!user.team && !!user.position}`);
-            await sendMessage(chatId, `⚠️ <b>Увага!</b> Деякі ваші дані відсутні в системі. Будь ласка, зверніться до HR для оновлення реєстрації.`);
+          // Нормалізуємо дані користувача (підтримуємо обидва формати)
+          const normalizedUser = {
+            fullName: user.fullName || user.FullName || '',
+            department: user.department || user.Department || '',
+            team: user.team || user.Team || '',
+            position: user.position || user.Position || '',
+            birthDate: user.birthDate || user.BirthDate || '',
+            firstWorkDay: user.firstWorkDay || user.FirstWorkDay || ''
+          };
+          
+          console.log(`📋 Користувач зареєстрований: ${normalizedUser.fullName}, показуємо головне меню`);
+          
+          // Перевіряємо, чи всі критичні дані на місці (ім'я, відділ, команда, посада)
+          const hasAllCriticalData = normalizedUser.fullName && 
+                                     normalizedUser.department && 
+                                     normalizedUser.team && 
+                                     normalizedUser.position;
+          
+          if (!hasAllCriticalData) {
+            const missingFields = [];
+            if (!normalizedUser.fullName) missingFields.push('ім\'я');
+            if (!normalizedUser.department) missingFields.push('відділ');
+            if (!normalizedUser.team) missingFields.push('команда');
+            if (!normalizedUser.position) missingFields.push('посада');
+            
+            console.warn(`⚠️ У користувача ${telegramId} відсутні дані: ${missingFields.join(', ')}`);
+            await sendMessage(chatId, `⚠️ <b>Увага!</b> Деякі ваші дані відсутні в системі (${missingFields.join(', ')}). Будь ласка, зверніться до HR для оновлення реєстрації або пройдіть реєстрацію через /start`);
           }
+          
           await showMainMenu(chatId, telegramId);
         }
       } catch (error) {
