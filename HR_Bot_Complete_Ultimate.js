@@ -5324,7 +5324,17 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       
       // Одразу повідомляємо HR про спробу взяти відпустку без днів
       await notifyHRAboutVacationDenial(user, startDateObj, endDate, daysNum, balance.remaining);
+      
+      // Якщо днів 0, інформуємо про закінчення
+      if (balance.remaining === 0) {
+        await notifyAboutVacationDaysExhausted(telegramId, user);
+      }
       return;
+    }
+    
+    // Перевіряємо, чи залишилось мало днів (менше 3)
+    if (balance.remaining <= 3 && balance.remaining > 0) {
+      await sendMessage(chatId, `⚠️ <b>Увага!</b> У вас залишилось мало днів відпустки: ${balance.remaining}. Після цієї заявки залишиться ${balance.remaining - daysNum} днів.`);
     }
     
     // Перевіряємо підключення до Google Sheets перед збереженням
@@ -7017,6 +7027,9 @@ async function processLateReport(chatId, telegramId, lateData) {
     const { date, time, reason } = lateData;
     const recordId = await saveLateRecord(telegramId, user, date, reason, time);
     
+    // Перевіряємо кількість спізнень за місяць
+    const lateStats = await getLateStatsForCurrentMonth(telegramId);
+    
     // Перевіряємо чи є PM
     const pm = await getPMForUser(user);
     if (pm) {
@@ -7024,7 +7037,12 @@ async function processLateReport(chatId, telegramId, lateData) {
     }
     await notifyHRAboutLate(user, date, time, reason, pm !== null);
     
-    await sendMessage(chatId, `✅ <b>Повідомлення про спізнення відправлено!</b>\n\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку роботи:</b> ${time}\n📝 <b>Причина:</b> ${reason}`);
+    // Якщо спізнень >= 7, інформуємо CEO, HR та користувача
+    if (lateStats.count >= 7) {
+      await notifyAboutExcessiveLates(telegramId, user, lateStats.count);
+    }
+    
+    await sendMessage(chatId, `✅ <b>Повідомлення про спізнення відправлено!</b>\n\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку роботи:</b> ${time}\n📝 <b>Причина:</b> ${reason}${lateStats.count >= 7 ? '\n\n⚠️ <b>УВАГА!</b> Кількість спізнень перевищує 7 за місяць!' : ''}`);
   } catch (error) {
     console.error('❌ Помилка processLateReport:', error);
     await sendMessage(chatId, '❌ Помилка обробки спізнення.');
@@ -7131,6 +7149,60 @@ async function notifyHRAboutLate(user, date, time, reason, hasPM) {
   }
 }
 
+// 🚨 ІНФОРМУВАННЯ ПРО ПЕРЕВИЩЕННЯ СПІЗНЕНЬ (>=7)
+async function notifyAboutExcessiveLates(telegramId, user, lateCount) {
+  try {
+    const message = `🚨 <b>УВАГА! ПЕРЕВИЩЕННЯ ЛІМІТУ СПІЗНЕНЬ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n⏰ <b>Кількість спізнень за місяць:</b> ${lateCount}\n⚠️ <b>Ліміт:</b> 7 спізнень/місяць\n\nПотрібна увага!`;
+    
+    // Інформуємо користувача
+    await sendMessage(telegramId, `🚨 <b>УВАГА!</b>\n\nКількість ваших спізнень за місяць перевищує ліміт (${lateCount} з 7). Будь ласка, зверніть увагу на своїй пунктуальності.`);
+    
+    // Інформуємо HR
+    if (HR_CHAT_ID) {
+      await sendMessage(HR_CHAT_ID, message);
+    }
+    
+    // Інформуємо всіх CEO
+    await notifyAllCEOAboutExcessiveLates(user, lateCount);
+    
+    console.log(`🚨 Інформовано про перевищення спізнень для ${user.fullName} (${lateCount} спізнень)`);
+  } catch (error) {
+    console.error('❌ Помилка notifyAboutExcessiveLates:', error);
+  }
+}
+
+// 👑 ІНФОРМУВАННЯ ВСІХ CEO ПРО ПЕРЕВИЩЕННЯ СПІЗНЕНЬ
+async function notifyAllCEOAboutExcessiveLates(user, lateCount) {
+  try {
+    if (!doc) return;
+    
+    await doc.loadInfo();
+    let rolesSheet = doc.sheetsByTitle['Roles'];
+    if (!rolesSheet) return;
+    
+    const rows = await rolesSheet.getRows();
+    const ceoRows = rows.filter(row => {
+      const role = row.get('Role');
+      return role === 'CEO';
+    });
+    
+    const message = `🚨 <b>УВАГА! ПЕРЕВИЩЕННЯ ЛІМІТУ СПІЗНЕНЬ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n⏰ <b>Кількість спізнень за місяць:</b> ${lateCount}\n⚠️ <b>Ліміт:</b> 7 спізнень/місяць\n\nПотрібна увага!`;
+    
+    for (const ceoRow of ceoRows) {
+      const ceoTelegramId = parseInt(ceoRow.get('TelegramID'));
+      if (ceoTelegramId && !isNaN(ceoTelegramId)) {
+        try {
+          await sendMessage(ceoTelegramId, message);
+        } catch (error) {
+          console.error(`❌ Помилка відправки повідомлення CEO ${ceoTelegramId}:`, error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('❌ Помилка notifyAllCEOAboutExcessiveLates:', error);
+  }
+}
+
 async function showLateStats(chatId, telegramId) {
   try {
     // Зберігаємо попередній стан (меню спізнень)
@@ -7172,6 +7244,25 @@ async function getLateStatsForCurrentMonth(telegramId) {
   } catch (error) {
     console.error('❌ Помилка getLateStatsForCurrentMonth:', error);
     return { count: 0 };
+  }
+}
+
+// 🏖️ ІНФОРМУВАННЯ ПРО ЗАКІНЧЕННЯ ДНІВ ВІДПУСТКИ
+async function notifyAboutVacationDaysExhausted(telegramId, user) {
+  try {
+    const message = `⚠️ <b>УВАГА! ЗАКІНЧИЛИСЬ ДНІ ВІДПУСТКИ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n\nУ співробітника залишилось 0 днів відпустки. Потрібна увага HR.`;
+    
+    // Інформуємо користувача
+    await sendMessage(telegramId, `⚠️ <b>Увага!</b>\n\nУ вас закінчились дні відпустки. Будь ласка, зверніться до HR для уточнення.`);
+    
+    // Інформуємо HR
+    if (HR_CHAT_ID) {
+      await sendMessage(HR_CHAT_ID, message);
+    }
+    
+    console.log(`⚠️ Інформовано про закінчення днів відпустки для ${user.fullName}`);
+  } catch (error) {
+    console.error('❌ Помилка notifyAboutVacationDaysExhausted:', error);
   }
 }
 
