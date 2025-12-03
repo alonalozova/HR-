@@ -2546,6 +2546,18 @@ async function completeRegistration(chatId, telegramId, data) {
     // Додаємо користувача в кеш одразу після реєстрації
     userCache.set(telegramId, userData);
     console.log(`✅ Користувач ${telegramId} (${fullName}) додано в кеш`);
+    
+    // Невелика затримка для синхронізації Google Sheets
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Перевіряємо, чи дані правильно збережені
+    const verifyUser = await getUserInfo(telegramId);
+    if (!verifyUser || !verifyUser.fullName) {
+      console.warn(`⚠️ Попередження: користувач ${telegramId} не знайдено одразу після реєстрації, але продовжуємо...`);
+      // Все одно показуємо меню, бо дані в кеші
+    } else {
+      console.log(`✅ Підтверджено: користувач ${telegramId} (${verifyUser.fullName}) знайдено в системі`);
+    }
 
     // Показуємо головне меню з персоналізованим привітанням
     await showMainMenu(chatId, telegramId);
@@ -5135,9 +5147,32 @@ async function processEmergencyVacationRequest(chatId, telegramId, vacationData)
   try {
     logger.info('Processing emergency vacation request', { telegramId, vacationData });
     
-    const user = await getUserInfo(telegramId);
+    // Отримуємо дані користувача з обов'язковою перевіркою
+    let user = await getUserInfo(telegramId);
+    
+    // Якщо не знайдено, спробуємо ще раз з очищенням кешу
     if (!user) {
-      throw new ValidationError('Користувач не знайдений. Пройдіть реєстрацію.', 'user');
+      console.warn(`⚠️ Користувач ${telegramId} не знайдено, очищаємо кеш та шукаємо знову...`);
+      userCache.delete(telegramId);
+      await new Promise(resolve => setTimeout(resolve, 500)); // Невелика затримка
+      user = await getUserInfo(telegramId);
+    }
+    
+    if (!user) {
+      console.error(`❌ КРИТИЧНА ПОМИЛКА: Користувач ${telegramId} не знайдено після повторного пошуку`);
+      throw new ValidationError(`Ваші дані не знайдені в системі. Будь ласка, зверніться до HR для перевірки реєстрації або пройдіть реєстрацію через /start`, 'user_data_missing');
+    }
+    
+    // Перевіряємо, чи є fullName
+    if (!user.fullName && !user.FullName) {
+      console.warn(`⚠️ КРИТИЧНО: Користувач ${telegramId} не має fullName!`);
+      userCache.delete(telegramId);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      user = await getUserInfo(telegramId);
+      
+      if (!user || (!user.fullName && !user.FullName)) {
+        throw new ValidationError(`Ваші дані не знайдені в системі. Будь ласка, зверніться до HR для перевірки реєстрації або пройдіть реєстрацію через /start`, 'user_data_missing');
+      }
     }
     
     const { startDate: startDateRaw, days, reason } = vacationData;
@@ -5236,8 +5271,18 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
     
     // Отримуємо дані користувача з обов'язковою перевіркою
     let user = await getUserInfo(telegramId);
+    
+    // Якщо не знайдено, спробуємо ще раз з очищенням кешу
     if (!user) {
-      throw new ValidationError('Користувач не знайдений. Пройдіть реєстрацію.', 'user');
+      console.warn(`⚠️ Користувач ${telegramId} не знайдено, очищаємо кеш та шукаємо знову...`);
+      userCache.delete(telegramId);
+      await new Promise(resolve => setTimeout(resolve, 500)); // Невелика затримка
+      user = await getUserInfo(telegramId);
+    }
+    
+    if (!user) {
+      console.error(`❌ КРИТИЧНА ПОМИЛКА: Користувач ${telegramId} не знайдено після повторного пошуку`);
+      throw new ValidationError(`Ваші дані не знайдені в системі. Будь ласка, зверніться до HR для перевірки реєстрації або пройдіть реєстрацію через /start`, 'user_data_missing');
     }
     
     // КРИТИЧНО: Перевіряємо, чи є fullName, якщо немає - перезавантажуємо та виправляємо
@@ -5247,11 +5292,12 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       
       // Очищаємо кеш та перезавантажуємо
       userCache.delete(telegramId);
+      await new Promise(resolve => setTimeout(resolve, 500));
       user = await getUserInfo(telegramId);
       
       if (!user || (!user.fullName && !user.FullName)) {
         console.error(`❌ КРИТИЧНА ПОМИЛКА: Не вдалося отримати fullName для користувача ${telegramId}`);
-        throw new ValidationError(`Ваші дані не знайдені в системі. Будь ласка, зверніться до HR для перевірки реєстрації.`, 'user_data_missing');
+        throw new ValidationError(`Ваші дані не знайдені в системі. Будь ласка, зверніться до HR для перевірки реєстрації або пройдіть реєстрацію через /start`, 'user_data_missing');
       }
     }
     
