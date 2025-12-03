@@ -996,6 +996,7 @@ async function processCallback(callbackQuery) {
       'faq_category': () => showFAQCategory(chatId, telegramId),
       // AI помічник видалено
       'approvals_vacations': () => showApprovalVacations(chatId, telegramId),
+      'approval_vacations': () => showApprovalVacations(chatId, telegramId), // Альтернативний callback
       'approvals_remote': () => showApprovalRemote(chatId, telegramId),
       'analytics_hr': () => showHRAnalytics(chatId, telegramId),
       'analytics_ceo': () => showCEOAnalytics(chatId, telegramId),
@@ -1126,6 +1127,15 @@ async function processCallback(callbackQuery) {
     } else if (data.startsWith('vacation_hr_reject_')) {
       const requestId = data.replace('vacation_hr_reject_', '');
       await handleHRVacationApproval(chatId, telegramId, requestId, false);
+    } else if (data.startsWith('approve_vacation_')) {
+      const requestId = data.replace('approve_vacation_', '');
+      await handleHRVacationApproval(chatId, telegramId, requestId, true);
+    } else if (data.startsWith('reject_vacation_')) {
+      const requestId = data.replace('reject_vacation_', '');
+      await handleHRVacationApproval(chatId, telegramId, requestId, false);
+    } else if (data.startsWith('view_vacation_')) {
+      const requestId = data.replace('view_vacation_', '');
+      await showVacationRequestDetails(chatId, telegramId, requestId);
     } else if (data.startsWith('stats_lates_month_')) {
       // Обробка вибору місяця для звіту по спізненнях
       const parts = data.replace('stats_lates_month_', '').split('_');
@@ -4172,26 +4182,53 @@ async function showApprovalVacations(chatId, telegramId) {
       });
     }
 
-    // Формуємо клавіатуру
+    // Формуємо клавіатуру з кнопками для кожної заявки
     const keyboard = {
       inline_keyboard: []
     };
 
     // Додаємо кнопки для заявок на затвердження (якщо є)
     if (pendingRequests.length > 0) {
-      const buttonsRow = [];
-      pendingRequests.slice(0, 3).forEach((row) => {
+      // Показуємо максимум 10 заявок на сторінку
+      const requestsToShow = pendingRequests.slice(0, 10);
+      
+      requestsToShow.forEach((row) => {
         const requestId = getValue(row, 'ID заявки', 'RequestID') || '';
         const fullName = getValue(row, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+        const startDate = getValue(row, 'Дата початку', 'StartDate') || '';
+        const days = getValue(row, 'Кількість днів', 'Days') || '0';
+        
         if (requestId) {
-          buttonsRow.push({
-            text: `✅ ${fullName.substring(0, 15)}`,
-            callback_data: `approve_vacation_${requestId}`
-          });
+          // Кнопка для перегляду деталей заявки
+          keyboard.inline_keyboard.push([
+            { 
+              text: `👤 ${fullName} (${startDate}, ${days} дн.)`, 
+              callback_data: `view_vacation_${requestId}` 
+            }
+          ]);
+          
+          // Кнопки підтвердження/відхилення
+          keyboard.inline_keyboard.push([
+            { 
+              text: '✅ Підтвердити', 
+              callback_data: `approve_vacation_${requestId}` 
+            },
+            { 
+              text: '❌ Відхилити', 
+              callback_data: `reject_vacation_${requestId}` 
+            }
+          ]);
         }
       });
-      if (buttonsRow.length > 0) {
-        keyboard.inline_keyboard.push(buttonsRow);
+      
+      // Якщо заявок більше 10, додаємо кнопку "Показати ще"
+      if (pendingRequests.length > 10) {
+        keyboard.inline_keyboard.push([
+          { 
+            text: `📄 Показати ще (${pendingRequests.length - 10})`, 
+            callback_data: `vacation_requests_page_1` 
+          }
+        ]);
       }
     }
 
@@ -6310,9 +6347,114 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
     
     console.log(`✅ Заявка ${requestId} ${approved ? 'підтверджена' : 'відхилена'} HR (${telegramId})`);
     
+    // Після затвердження/відхилення показуємо оновлений список заявок
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Невелика затримка для синхронізації
+    await showApprovalVacations(chatId, telegramId);
+    
   } catch (error) {
     console.error('❌ Помилка handleHRVacationApproval:', error);
     await sendMessage(chatId, '❌ Помилка обробки заявки. Спробуйте пізніше.');
+  }
+}
+
+// 📋 ПЕРЕГЛЯД ДЕТАЛЕЙ ЗАЯВКИ НА ВІДПУСТКУ
+async function showVacationRequestDetails(chatId, telegramId, requestId) {
+  try {
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR' && role !== 'CEO') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR та CEO.');
+      return;
+    }
+    
+    if (!doc) {
+      await sendMessage(chatId, '❌ Помилка: Google Sheets не підключено.');
+      return;
+    }
+    
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+    if (!sheet) {
+      await sendMessage(chatId, '❌ Таблиця відпусток не знайдена.');
+      return;
+    }
+    
+    const rows = await sheet.getRows();
+    const getValue = (row, uaKey, enKey) => {
+      const value = row.get(uaKey);
+      if (value === undefined || value === null || value === '') {
+        return row.get(enKey) || '';
+      }
+      return value;
+    };
+    
+    const requestRow = rows.find(row => {
+      const rowId = getValue(row, 'ID заявки', 'RequestID') || '';
+      return rowId === requestId || String(rowId).trim() === String(requestId).trim();
+    });
+    
+    if (!requestRow) {
+      await sendMessage(chatId, `❌ Заявка з ID ${requestId} не знайдена.`);
+      return;
+    }
+    
+    const fullName = getValue(requestRow, 'Ім\'я та прізвище', 'FullName') || 'Невідомо';
+    const startDate = getValue(requestRow, 'Дата початку', 'StartDate') || '';
+    const endDate = getValue(requestRow, 'Дата закінчення', 'EndDate') || '';
+    const days = getValue(requestRow, 'Кількість днів', 'Days') || '0';
+    const status = getValue(requestRow, 'Статус', 'Status') || '';
+    const department = getValue(requestRow, 'Відділ', 'Department') || '';
+    const team = getValue(requestRow, 'Команда', 'Team') || '';
+    const requestType = getValue(requestRow, 'Тип заявки', 'RequestType') || 'regular';
+    const reason = getValue(requestRow, 'Причина', 'Reason') || '';
+    const createdAt = getValue(requestRow, 'Дата створення', 'CreatedAt') || '';
+    const balanceBefore = getValue(requestRow, 'Баланс до', 'BalanceBefore') || '';
+    const balanceAfter = getValue(requestRow, 'Баланс після', 'BalanceAfter') || '';
+    
+    let text = `📋 <b>Деталі заявки на відпустку</b>\n\n`;
+    text += `🆔 <b>ID:</b> ${requestId}\n`;
+    text += `👤 <b>Співробітник:</b> ${fullName}\n`;
+    text += `🏢 <b>Відділ:</b> ${department}\n`;
+    text += `👥 <b>Команда:</b> ${team}\n`;
+    text += `📅 <b>Період:</b> ${startDate} - ${endDate}\n`;
+    text += `📊 <b>Кількість днів:</b> ${days}\n`;
+    text += `📝 <b>Тип:</b> ${requestType.toLowerCase().includes('emergency') ? '🚨 Термінова' : '📝 Звичайна'}\n`;
+    text += `⏳ <b>Статус:</b> ${status}\n`;
+    
+    if (reason) {
+      text += `💬 <b>Причина:</b> ${reason}\n`;
+    }
+    
+    if (balanceBefore || balanceAfter) {
+      text += `💰 <b>Баланс:</b> ${balanceBefore} → ${balanceAfter}\n`;
+    }
+    
+    if (createdAt) {
+      try {
+        const createdDate = new Date(createdAt);
+        if (!isNaN(createdDate.getTime())) {
+          text += `📆 <b>Подано:</b> ${formatDate(createdDate)}\n`;
+        }
+      } catch (e) {
+        // Якщо дата не валідна, просто пропускаємо
+      }
+    }
+    
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Підтвердити', callback_data: `approve_vacation_${requestId}` },
+          { text: '❌ Відхилити', callback_data: `reject_vacation_${requestId}` }
+        ],
+        [
+          { text: '⬅️ Назад до списку', callback_data: 'approval_vacations' }
+        ]
+      ]
+    };
+    
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    console.error('❌ Помилка showVacationRequestDetails:', error);
+    await sendMessage(chatId, '❌ Помилка завантаження деталей заявки.');
   }
 }
 
