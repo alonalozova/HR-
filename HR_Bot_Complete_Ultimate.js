@@ -84,6 +84,16 @@ const SickHandler = require('./handlers/sick.handler');
 const RegistrationHandler = require('./handlers/registration.handler');
 const ApprovalHandler = require('./handlers/approval.handler');
 
+// 🔧 ЕКЗЕМПЛЯРИ SERVICES ТА HANDLERS (будуть ініціалізовані після завантаження залежностей)
+let notificationService;
+let vacationService;
+let vacationHandler;
+let remoteHandler;
+let lateHandler;
+let sickHandler;
+let registrationHandler;
+let approvalHandler;
+
 // ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
 class AppError extends Error {
   constructor(message, statusCode, isOperational = true, context = {}) {
@@ -985,28 +995,29 @@ async function processMessage(message) {
     
     // Обробка відпусток (пріоритет над реєстрацією)
     console.log('🔍 processMessage: Перевіряємо handleVacationProcess для', telegramId, 'текст:', text);
-    if (await handleVacationProcess(chatId, telegramId, text)) {
+    if (vacationHandler && await vacationHandler.handleVacationProcess(chatId, telegramId, text)) {
       console.log('✅ handleVacationProcess обробив повідомлення');
       return;
     }
     
     // Обробка спізнень
-    if (await handleLateProcess(chatId, telegramId, text)) {
+    if (lateHandler && await lateHandler.handleLateProcess(chatId, telegramId, text)) {
       return;
     }
     
     // Обробка Remote
-    if (await handleRemoteProcess(chatId, telegramId, text)) {
+    if (remoteHandler && await remoteHandler.handleRemoteProcess(chatId, telegramId, text)) {
       return;
     }
     
     // Обробка лікарняного
-    if (await handleSickProcess(chatId, telegramId, text)) {
+    if (sickHandler && await sickHandler.handleSickProcess(chatId, telegramId, text)) {
       return;
     }
     
     // Обробка реєстрації
     if (registrationCache.has(telegramId)) {
+      // Реєстрація обробляється через handleRegistrationStep (залишаємо як є, бо там складніша логіка)
       const handled = await handleRegistrationStep(chatId, telegramId, text);
       if (handled) {
         return; // Реєстрація оброблена, не показуємо загальне меню
@@ -1057,23 +1068,23 @@ async function processCallback(callbackQuery) {
     
     // Маршрутизація callback'ів
     const routes = {
-      'vacation_apply': () => showVacationForm(chatId, telegramId),
-      'vacation_balance': () => showVacationBalance(chatId, telegramId),
-      'vacation_requests': () => showMyVacationRequests(chatId, telegramId),
-      'vacation_emergency': () => showEmergencyVacationForm(chatId, telegramId),
-      'remote_today': () => setRemoteToday(chatId, telegramId),
-      'quick_remote_today': () => setRemoteToday(chatId, telegramId),
-      'remote_calendar': () => showRemoteCalendar(chatId, telegramId),
-      'remote_stats': () => showRemoteStats(chatId, telegramId),
-      'late_report': () => reportLate(chatId, telegramId),
-      'quick_late_today': () => handleLateToday(chatId, telegramId),
-      'late_stats': () => showLateStats(chatId, telegramId),
-      'late_today': () => handleLateToday(chatId, telegramId),
-      'late_other_date': () => handleLateOtherDate(chatId, telegramId),
-      'late_add_reason': () => handleLateAddReason(chatId, telegramId),
-      'late_skip_reason': () => handleLateSkipReason(chatId, telegramId),
-      'sick_report': () => reportSick(chatId, telegramId),
-      'sick_stats': () => showSickStats(chatId, telegramId),
+      'vacation_apply': () => vacationHandler ? vacationHandler.showVacationForm(chatId, telegramId) : showVacationForm(chatId, telegramId),
+      'vacation_balance': () => vacationHandler ? vacationHandler.showVacationBalance(chatId, telegramId) : showVacationBalance(chatId, telegramId),
+      'vacation_requests': () => vacationHandler ? vacationHandler.showMyVacationRequests(chatId, telegramId) : showMyVacationRequests(chatId, telegramId),
+      'vacation_emergency': () => vacationHandler ? vacationHandler.showEmergencyVacationForm(chatId, telegramId) : showEmergencyVacationForm(chatId, telegramId),
+      'remote_today': () => remoteHandler ? remoteHandler.setRemoteToday(chatId, telegramId) : setRemoteToday(chatId, telegramId),
+      'quick_remote_today': () => remoteHandler ? remoteHandler.setRemoteToday(chatId, telegramId) : setRemoteToday(chatId, telegramId),
+      'remote_calendar': () => remoteHandler ? remoteHandler.showRemoteCalendar(chatId, telegramId) : showRemoteCalendar(chatId, telegramId),
+      'remote_stats': () => remoteHandler ? remoteHandler.showRemoteStats(chatId, telegramId) : showRemoteStats(chatId, telegramId),
+      'late_report': () => lateHandler ? lateHandler.reportLate(chatId, telegramId) : reportLate(chatId, telegramId),
+      'quick_late_today': () => lateHandler ? lateHandler.handleLateToday(chatId, telegramId) : handleLateToday(chatId, telegramId),
+      'late_stats': () => lateHandler ? lateHandler.showLateStats(chatId, telegramId) : showLateStats(chatId, telegramId),
+      'late_today': () => lateHandler ? lateHandler.handleLateToday(chatId, telegramId) : handleLateToday(chatId, telegramId),
+      'late_other_date': () => lateHandler ? lateHandler.handleLateOtherDate(chatId, telegramId) : handleLateOtherDate(chatId, telegramId),
+      'late_add_reason': () => lateHandler ? lateHandler.handleLateAddReason(chatId, telegramId) : handleLateAddReason(chatId, telegramId),
+      'late_skip_reason': () => lateHandler ? lateHandler.handleLateSkipReason(chatId, telegramId) : handleLateSkipReason(chatId, telegramId),
+      'sick_report': () => sickHandler ? sickHandler.reportSick(chatId, telegramId) : reportSick(chatId, telegramId),
+      'sick_stats': () => sickHandler ? sickHandler.showSickStats(chatId, telegramId) : showSickStats(chatId, telegramId),
       'stats_monthly': () => showMonthlyStats(chatId, telegramId),
       'stats_export': () => exportMyData(chatId, telegramId),
       'quick_review_requests': () => showApprovalsMenu(chatId, telegramId),
@@ -1118,9 +1129,9 @@ async function processCallback(callbackQuery) {
       'asap_category_other': () => showASAPCategoryForm(chatId, telegramId, 'other'),
       'faq_category': () => showFAQCategory(chatId, telegramId),
       // AI помічник видалено
-      'approvals_vacations': () => showApprovalVacations(chatId, telegramId),
-      'approval_vacations': () => showApprovalVacations(chatId, telegramId), // Альтернативний callback
-      'approvals_remote': () => showApprovalRemote(chatId, telegramId),
+      'approvals_vacations': () => approvalHandler ? approvalHandler.showApprovalVacations(chatId, telegramId) : showApprovalVacations(chatId, telegramId),
+      'approval_vacations': () => approvalHandler ? approvalHandler.showApprovalVacations(chatId, telegramId) : showApprovalVacations(chatId, telegramId), // Альтернативний callback
+      'approvals_remote': () => approvalHandler ? approvalHandler.showApprovalRemote(chatId, telegramId) : showApprovalRemote(chatId, telegramId),
       'analytics_hr': () => showHRAnalytics(chatId, telegramId),
       'analytics_ceo': () => showCEOAnalytics(chatId, telegramId),
       'hr_mailings': () => showMailingsMenu(chatId, telegramId),
@@ -1159,10 +1170,10 @@ async function processCallback(callbackQuery) {
           // Викликаємо функцію попереднього стану
           const stateFunctions = {
             'showMainMenu': () => showMainMenu(chatId, telegramId),
-            'showVacationMenu': () => showVacationMenu(chatId, telegramId),
-            'showRemoteMenu': () => showRemoteMenu(chatId, telegramId),
-            'showLateMenu': () => showLateMenu(chatId, telegramId),
-            'showSickMenu': () => showSickMenu(chatId, telegramId),
+            'showVacationMenu': () => vacationHandler ? vacationHandler.showVacationMenu(chatId, telegramId) : showVacationMenu(chatId, telegramId),
+            'showRemoteMenu': () => remoteHandler ? remoteHandler.showRemoteMenu(chatId, telegramId) : showRemoteMenu(chatId, telegramId),
+            'showLateMenu': () => lateHandler ? lateHandler.showLateMenu(chatId, telegramId) : showLateMenu(chatId, telegramId),
+            'showSickMenu': () => sickHandler ? sickHandler.showSickMenu(chatId, telegramId) : showSickMenu(chatId, telegramId),
             'showStatsMenu': () => showStatsMenu(chatId, telegramId),
             'showOnboardingMenu': () => showOnboardingMenu(chatId, telegramId),
             'showFAQMenu': () => showFAQMenu(chatId, telegramId),
@@ -1258,7 +1269,11 @@ async function processCallback(callbackQuery) {
       await handleHRVacationApproval(chatId, telegramId, requestId, false);
     } else if (data.startsWith('view_vacation_')) {
       const requestId = data.replace('view_vacation_', '');
-      await showVacationRequestDetails(chatId, telegramId, requestId);
+      if (approvalHandler) {
+        await approvalHandler.showVacationRequestDetails(chatId, telegramId, requestId);
+      } else {
+        await showVacationRequestDetails(chatId, telegramId, requestId);
+      }
     } else if (data.startsWith('stats_lates_month_')) {
       // Обробка вибору місяця для звіту по спізненнях
       const parts = data.replace('stats_lates_month_', '').split('_');
@@ -1271,7 +1286,11 @@ async function processCallback(callbackQuery) {
       // Обробка пагінації для списку заявок на відпустку
       const page = parseInt(data.replace('vacation_requests_page_', ''));
       if (!isNaN(page) && page >= 0) {
-        await showMyVacationRequests(chatId, telegramId, page);
+        if (vacationHandler) {
+          await vacationHandler.showMyVacationRequests(chatId, telegramId, page);
+        } else {
+          await showMyVacationRequests(chatId, telegramId, page);
+        }
       }
     } else if (data === 'emergency_vacation_confirm_yes') {
       const regData = registrationCache.get(telegramId);
