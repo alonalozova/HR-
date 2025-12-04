@@ -1190,7 +1190,7 @@ async function processCallback(callbackQuery) {
     }
     
   } catch (error) {
-    console.error('❌ Помилка processCallback:', error);
+    await handleError(error, chatId, telegramId, sendMessage);
   }
 }
 
@@ -5722,17 +5722,14 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
       console.log(`📝 Зберігаємо заявку ${requestId} в таблицю "${sheet.title}"...`);
       console.log(`📋 Дані для збереження:`, JSON.stringify(rowData, null, 2));
       
-      const savedRow = await sheet.addRow(rowData);
+      // Використовуємо batch операцію для оптимізації
+      const savedRows = await batchAddRows(sheet, [rowData]);
+      const savedRow = savedRows[0];
       
       // Перевіряємо, чи рядок дійсно збережено
       if (!savedRow) {
         throw new DatabaseError('Не вдалося зберегти рядок в Google Sheets', 'save_vacation');
       }
-      
-      console.log(`✅ Рядок створено, зберігаємо...`);
-      
-      // Явно зберігаємо рядок для гарантії
-      await savedRow.save();
       
       console.log(`✅ Рядок збережено, перевіряємо ID...`);
       
