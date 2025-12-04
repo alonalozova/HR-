@@ -70,7 +70,7 @@ const logger = require('./utils/logger');
 const { messageLimiter, callbackLimiter, registrationLimiter } = require('./utils/rateLimiter');
 const { validateVacationRequest, validateRegistrationData, validateTelegramId, validateMessageText } = require('./utils/validation');
 const { getSheetValue, getSheetValueByLanguage, getTelegramId, matchesTelegramId } = require('./utils/sheetsHelpers');
-const { handleError, withErrorHandling } = require('./utils/errorHandler');
+const { handleError, withErrorHandling, errorHandlingMiddleware } = require('./utils/errorHandler');
 const { batchAddRows, batchUpdateRows, getAllRowsPaginated } = require('./utils/sheetsBatch');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
@@ -5747,7 +5747,8 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
           } else {
             savedRow.set('RequestID', requestId);
           }
-          await savedRow.save();
+          // Використовуємо batch операцію замість окремих save()
+          await batchUpdateRows([savedRow]);
           console.log(`✅ ID заявки виправлено на: ${requestId}`);
         } catch (error) {
           console.error(`❌ Не вдалося виправити ID заявки:`, error);
