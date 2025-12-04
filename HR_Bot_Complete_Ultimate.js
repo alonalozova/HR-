@@ -74,6 +74,16 @@ const { handleError, withErrorHandling, errorHandlingMiddleware } = require('./u
 const { batchAddRows, batchUpdateRows, getAllRowsPaginated } = require('./utils/sheetsBatch');
 // const Groq = require('groq-sdk'); // Тимчасово відключено
 
+// 📦 ІМПОРТ МОДУЛІВ (Services та Handlers)
+const NotificationService = require('./services/notification.service');
+const VacationService = require('./services/vacation.service');
+const VacationHandler = require('./handlers/vacation.handler');
+const RemoteHandler = require('./handlers/remote.handler');
+const LateHandler = require('./handlers/late.handler');
+const SickHandler = require('./handlers/sick.handler');
+const RegistrationHandler = require('./handlers/registration.handler');
+const ApprovalHandler = require('./handlers/approval.handler');
+
 // ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
 class AppError extends Error {
   constructor(message, statusCode, isOperational = true, context = {}) {
@@ -321,6 +331,85 @@ class RequestQueue {
 
 // Створюємо глобальну чергу для Google Sheets операцій
 const sheetsQueue = new RequestQueue(3, 100); // Максимум 3 одночасні запити, затримка 100мс
+
+// 🎯 ІНІЦІАЛІЗАЦІЯ SERVICES ТА HANDLERS (буде викликана після initGoogleSheets)
+let notificationService;
+let vacationService;
+let vacationHandler;
+let remoteHandler;
+let lateHandler;
+let sickHandler;
+let registrationHandler;
+let approvalHandler;
+
+// Функція для ініціалізації всіх модулів (викликається після initGoogleSheets)
+function initializeModules() {
+  // Створюємо залежності для services та handlers
+  const dependencies = {
+    // Core dependencies
+    bot,
+    doc,
+    sheetsQueue,
+    userCache,
+    registrationCache,
+    vacationRequestsCache,
+    navigationStack,
+    HR_CHAT_ID,
+    PAGE_SIZE: 5,
+    
+    // Helper functions (будуть передані як залежності)
+    sendMessage,
+    getUserInfo,
+    getUserRole,
+    getPMForUser,
+    formatDate,
+    logUserData,
+    addBackButton,
+    determineRoleByPositionAndDepartment,
+    saveUserRole,
+    processVacationRequest,
+    processEmergencyVacationRequest,
+    processRemoteRequest,
+    processLateReport,
+    processSickReport,
+    getRemoteStatsForCurrentMonth,
+    getLateStatsForCurrentMonth,
+    getSickStatsForCurrentMonth,
+    findVacationRowById,
+    batchUpdateRows
+  };
+  
+  // Ініціалізуємо services
+  notificationService = new NotificationService(dependencies);
+  vacationService = new VacationService(dependencies);
+  
+  // Ініціалізуємо handlers
+  vacationHandler = new VacationHandler({
+    ...dependencies,
+    vacationService,
+    notificationService
+  });
+  remoteHandler = new RemoteHandler({
+    ...dependencies,
+    notificationService
+  });
+  lateHandler = new LateHandler({
+    ...dependencies,
+    notificationService
+  });
+  sickHandler = new SickHandler({
+    ...dependencies,
+    notificationService
+  });
+  registrationHandler = new RegistrationHandler(dependencies);
+  approvalHandler = new ApprovalHandler({
+    ...dependencies,
+    vacationService,
+    notificationService
+  });
+  
+  logger.info('All modules initialized successfully');
+}
 
 // 🔍 ІНДЕКС КОРИСТУВАЧІВ ДЛЯ ШВИДКОГО ПОШУКУ
 /**
