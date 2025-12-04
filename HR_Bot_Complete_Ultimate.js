@@ -84,16 +84,6 @@ const SickHandler = require('./handlers/sick.handler');
 const RegistrationHandler = require('./handlers/registration.handler');
 const ApprovalHandler = require('./handlers/approval.handler');
 
-// 🔧 ЕКЗЕМПЛЯРИ SERVICES ТА HANDLERS (будуть ініціалізовані після завантаження залежностей)
-let notificationService;
-let vacationService;
-let vacationHandler;
-let remoteHandler;
-let lateHandler;
-let sickHandler;
-let registrationHandler;
-let approvalHandler;
-
 // ✅ ПРОФЕСІЙНА ОБРОБКА ПОМИЛОК
 class AppError extends Error {
   constructor(message, statusCode, isOperational = true, context = {}) {
