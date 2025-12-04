@@ -928,7 +928,17 @@ async function processMessage(message) {
             if (!normalizedUser.position) missingFields.push('посада');
             
             logger.warn('User missing some data', { telegramId, missingFields });
-            await sendMessage(chatId, `⚠️ <b>Увага!</b> Деякі ваші дані відсутні в системі (${missingFields.join(', ')}). Будь ласка, зверніться до HR для оновлення реєстрації або пройдіть реєстрацію через /start`);
+            
+            // Пропонуємо почати реєстрацію
+            const keyboard = {
+              inline_keyboard: [
+                [
+                  { text: '📝 Почати реєстрацію', callback_data: 'start_registration' }
+                ]
+              ]
+            };
+            
+            await sendMessage(chatId, `⚠️ <b>Увага!</b> Деякі ваші дані відсутні в системі (${missingFields.join(', ')}). Будь ласка, пройдіть реєстрацію, натиснувши кнопку нижче:`, keyboard);
           } else {
             await showMainMenu(chatId, telegramId);
           }
@@ -5118,11 +5128,50 @@ ${message}`;
 // Початок реєстрації з callback
 async function startRegistrationFromCallback(chatId, telegramId) {
   try {
-    const user = await bot.getChatMember(chatId, telegramId);
-    await startRegistration(chatId, telegramId, user.user.username, user.user.first_name, user.user.last_name);
+    logger.info('Starting registration from callback', { telegramId });
+    
+    // Очищаємо кеш користувача, щоб почати з чистої сторінки
+    if (userCache.has(telegramId)) {
+      userCache.delete(telegramId);
+      logger.debug('User cache cleared for registration', { telegramId });
+    }
+    
+    // Очищаємо попередні дані реєстрації, якщо вони є
+    if (registrationCache.has(telegramId)) {
+      registrationCache.delete(telegramId);
+      logger.debug('Registration cache cleared', { telegramId });
+    }
+    
+    // Спробуємо отримати дані користувача з Telegram API
+    let username = null;
+    let firstName = null;
+    let lastName = null;
+    
+    try {
+      const chatMember = await bot.getChatMember(chatId, telegramId);
+      if (chatMember && chatMember.user) {
+        username = chatMember.user.username || null;
+        firstName = chatMember.user.first_name || null;
+        lastName = chatMember.user.last_name || null;
+      }
+    } catch (telegramError) {
+      logger.warn('Could not get chat member, using defaults', { telegramId, error: telegramError.message });
+      // Продовжуємо з null значеннями
+    }
+    
+    await startRegistration(chatId, telegramId, username, firstName, lastName);
   } catch (error) {
+    logger.error('Error in startRegistrationFromCallback', error, { telegramId });
     console.error('❌ Помилка startRegistrationFromCallback:', error);
-    await startRegistration(chatId, telegramId, null, null, null);
+    console.error('❌ Stack:', error.stack);
+    
+    // Fallback - спробуємо почати реєстрацію з null значеннями
+    try {
+      await startRegistration(chatId, telegramId, null, null, null);
+    } catch (fallbackError) {
+      logger.error('Fallback registration also failed', fallbackError, { telegramId });
+      await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
+    }
   }
 }
 
