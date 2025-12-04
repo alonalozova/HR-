@@ -1,20 +1,19 @@
 /**
- * 📢 NOTIFICATION SERVICE
- * Сервіс для відправки всіх сповіщень (notify* функції)
+ * 🔔 NOTIFICATION SERVICE
+ * Сервіс для відправки сповіщень користувачам, PM, HR та CEO
  */
 
 const logger = require('../utils/logger');
 const { TelegramError, ValidationError } = require('../utils/errors');
-const { formatDate } = require('../utils/validation');
 
 class NotificationService {
   constructor(dependencies) {
     // Залежності з основного файлу
     this.sendMessage = dependencies.sendMessage;
-    this.getUserInfo = dependencies.getUserInfo;
-    this.getUserRole = dependencies.getUserRole;
-    this.getPMForUser = dependencies.getPMForUser;
+    this.formatDate = dependencies.formatDate;
     this.logUserData = dependencies.logUserData;
+    this.getUserInfo = dependencies.getUserInfo;
+    this.getPMForUser = dependencies.getPMForUser;
     this.HR_CHAT_ID = dependencies.HR_CHAT_ID;
     this.userCache = dependencies.userCache;
     this.doc = dependencies.doc;
@@ -27,7 +26,7 @@ class NotificationService {
     try {
       if (!pm || !pm.telegramId) return;
       
-      const message = `📋 <b>Нова заявка на відпустку</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n🆔 <b>ID заявки:</b> ${requestId}\n\n⏳ <b>Потребує підтвердження PM</b>`;
+      const message = `📋 <b>Нова заявка на відпустку</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Період:</b> ${this.formatDate(startDate)} - ${this.formatDate(endDate)}\n📊 <b>Днів:</b> ${days}\n🆔 <b>ID заявки:</b> ${requestId}\n\n⏳ <b>Потребує підтвердження PM</b>`;
       
       await this.sendMessage(pm.telegramId, message);
       
@@ -86,7 +85,7 @@ class NotificationService {
       message += `👤 <b>Співробітник:</b> ${userName}\n`;
       message += `🏢 <b>Відділ:</b> ${userDepartment}\n`;
       message += `👥 <b>Команда:</b> ${userTeam}\n`;
-      message += `📅 <b>Період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n`;
+      message += `📅 <b>Період:</b> ${this.formatDate(startDate)} - ${this.formatDate(endDate)}\n`;
       message += `📊 <b>Днів:</b> ${days}\n`;
       message += `👤 <b>PM:</b> ${userPM}\n`;
       message += `🆔 <b>ID заявки:</b> ${requestId}\n\n`;
@@ -110,10 +109,7 @@ class NotificationService {
         message += `⏳ <b>Статус:</b> Очікує підтвердження PM`;
       }
       
-      const keyboard = {
-        inline_keyboard: []
-      };
-      
+      const keyboard = { inline_keyboard: [] };
       if (canApprove) {
         keyboard.inline_keyboard.push([
           { text: '✅ Підтвердити', callback_data: `vacation_hr_approve_${requestId}` },
@@ -150,7 +146,7 @@ class NotificationService {
       message += `👤 <b>Співробітник:</b> ${user.fullName}\n`;
       message += `🏢 <b>Відділ:</b> ${user.department}\n`;
       if (user.team) message += `👥 <b>Команда:</b> ${user.team}\n`;
-      message += `📅 <b>Запитуваний період:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n`;
+      message += `📅 <b>Запитуваний період:</b> ${this.formatDate(startDate)} - ${this.formatDate(endDate)}\n`;
       message += `📊 <b>Запитано днів:</b> ${days}\n`;
       message += `💰 <b>Залишилось днів:</b> ${remainingDays}\n\n`;
       message += `⚠️ <b>Відпустку автоматично відмовлено.</b>\n`;
@@ -193,7 +189,7 @@ class NotificationService {
       message += `👤 <b>Співробітник:</b> ${user.fullName || 'Невідомо'}\n`;
       message += `🏢 <b>Відділ:</b> ${user.department || 'Невідомо'}\n`;
       message += `👥 <b>Команда:</b> ${user.team || 'Невідомо'}\n`;
-      message += `📅 <b>Період:</b> ${formatDate(startDateObj)} - ${formatDate(endDateObj)}\n`;
+      message += `📅 <b>Період:</b> ${this.formatDate(startDateObj)} - ${this.formatDate(endDateObj)}\n`;
       message += `📊 <b>Днів:</b> ${days}\n`;
       message += `🆔 <b>ID заявки:</b> ${requestId}\n\n`;
       message += `🔒 <b>КОНФІДЕНЦІЙНА ІНФОРМАЦІЯ</b>\n`;
@@ -242,7 +238,7 @@ class NotificationService {
     try {
       if (!this.HR_CHAT_ID) return;
       
-      let message = `⚠️ <b>КОНФЛІКТ ВІДПУСТОК</b>\n\n👤 <b>Співробітник:</b> ${user.fullName} (${user.department}/${user.team})\n📅 <b>Запитувана дата:</b> ${formatDate(startDate)} - ${formatDate(endDate)}\n\n🔄 <b>Перетини з:</b>\n`;
+      let message = `⚠️ <b>КОНФЛІКТ ВІДПУСТОК</b>\n\n👤 <b>Співробітник:</b> ${user.fullName} (${user.department}/${user.team})\n📅 <b>Запитувана дата:</b> ${this.formatDate(startDate)} - ${this.formatDate(endDate)}\n\n🔄 <b>Перетини з:</b>\n`;
       
       conflicts.forEach(conflict => {
         message += `• ${conflict.fullName} (${conflict.department}/${conflict.team}): ${conflict.startDate} - ${conflict.endDate}\n`;
@@ -262,7 +258,7 @@ class NotificationService {
       const pm = await this.getPMForUser(user);
       if (!pm || !pm.telegramId) return;
       
-      const message = `⏰ <b>Спізнення</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку:</b> ${time}\n📝 <b>Причина:</b> ${reason}`;
+      const message = `⏰ <b>Спізнення</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${this.formatDate(date)}\n⏰ <b>Час початку:</b> ${time}\n📝 <b>Причина:</b> ${reason}`;
       await this.sendMessage(pm.telegramId, message);
     } catch (error) {
       logger.error('Error in notifyPMAboutLate', error);
@@ -276,7 +272,7 @@ class NotificationService {
     try {
       if (!this.HR_CHAT_ID) return;
       
-      const message = `⏰ <b>ПОВІДОМЛЕННЯ ПРО СПІЗНЕННЯ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку роботи:</b> ${time}\n📝 <b>Причина:</b> ${reason}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
+      const message = `⏰ <b>ПОВІДОМЛЕННЯ ПРО СПІЗНЕННЯ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${this.formatDate(date)}\n⏰ <b>Час початку роботи:</b> ${time}\n📝 <b>Причина:</b> ${reason}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
       await this.sendMessage(this.HR_CHAT_ID, message);
     } catch (error) {
       logger.error('Error in notifyHRAboutLate', error);
@@ -358,14 +354,14 @@ class NotificationService {
   }
 
   /**
-   * Повідомляє PM про Remote роботу
+   * Повідомляє PM про remote
    */
   async notifyPMAboutRemote(user, date) {
     try {
       const pm = await this.getPMForUser(user);
       if (!pm || !pm.telegramId) return;
       
-      const message = `🏠 <b>Remote робота</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}`;
+      const message = `🏠 <b>Remote день</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${this.formatDate(date)}`;
       await this.sendMessage(pm.telegramId, message);
     } catch (error) {
       logger.error('Error in notifyPMAboutRemote', error);
@@ -373,13 +369,13 @@ class NotificationService {
   }
 
   /**
-   * Повідомляє HR про Remote роботу
+   * Повідомляє HR про remote
    */
   async notifyHRAboutRemote(user, date, hasPM) {
     try {
       if (!this.HR_CHAT_ID) return;
       
-      const message = `🏠 <b>REMOTE РОБОТА</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
+      const message = `🏠 <b>ПОВІДОМЛЕННЯ ПРО REMOTE</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${this.formatDate(date)}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
       await this.sendMessage(this.HR_CHAT_ID, message);
     } catch (error) {
       logger.error('Error in notifyHRAboutRemote', error);
@@ -394,7 +390,7 @@ class NotificationService {
       const pm = await this.getPMForUser(user);
       if (!pm || !pm.telegramId) return;
       
-      const message = `🏥 <b>Лікарняний</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}`;
+      const message = `🏥 <b>Лікарняний</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${this.formatDate(date)}`;
       await this.sendMessage(pm.telegramId, message);
     } catch (error) {
       logger.error('Error in notifyPMAboutSick', error);
@@ -408,7 +404,7 @@ class NotificationService {
     try {
       if (!this.HR_CHAT_ID) return;
       
-      const message = `🏥 <b>ЛІКАРНЯНИЙ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
+      const message = `🏥 <b>ПОВІДОМЛЕННЯ ПРО ЛІКАРНЯНИЙ</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ:</b> ${user.department}\n👥 <b>Команда:</b> ${user.team}\n📅 <b>Дата:</b> ${this.formatDate(date)}\n\n${hasPM ? '✅ PM вже повідомлено' : '⚠️ PM не призначено'}`;
       await this.sendMessage(this.HR_CHAT_ID, message);
     } catch (error) {
       logger.error('Error in notifyHRAboutSick', error);
@@ -417,4 +413,3 @@ class NotificationService {
 }
 
 module.exports = NotificationService;
-
