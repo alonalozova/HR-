@@ -1406,8 +1406,8 @@ async function sendMessage(chatId, text, keyboard = null) {
         logger.info('Message sent as plain text after HTML error', { chatId });
       } catch (retryError) {
         logger.error('Failed to send message even as plain text', retryError, { chatId });
-        // Не показуємо помилку користувачу для /start команди, щоб не блокувати роботу
-        // Просто логуємо помилку
+        // Не показуємо помилку користувачу, щоб не блокувати роботу
+        // Просто логуємо помилку та продовжуємо
       }
     } else {
       logger.error('Failed to send message', error, { chatId });
