@@ -877,7 +877,7 @@ async function processMessage(message) {
     }
     
     // Обробка команди /start (до валідації, бо це системна команда)
-    if (text === '/start' || text.startsWith('/start ')) {
+    if (text === '/start' || text.startsWith('/start')) {
       logger.info('Processing /start command', { telegramId });
       try {
         // Очищаємо кеш для перезавантаження даних з Google Sheets
