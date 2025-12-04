@@ -2324,7 +2324,13 @@ async function showWelcomeMessage(chatId, telegramId, username, firstName, lastN
       userName = lastName;
     }
     
-    const welcomeText = `👋 <b>Привіт, ${userName}!</b>
+    // Екрануємо HTML символи в імені користувача для безпеки
+    const safeUserName = (userName || 'колега')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    
+    const welcomeText = `👋 <b>Привіт, ${safeUserName}!</b>
 
 Чим можу допомогти?
 
