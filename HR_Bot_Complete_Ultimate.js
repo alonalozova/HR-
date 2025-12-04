@@ -1370,8 +1370,15 @@ async function sendMessage(chatId, text, keyboard = null) {
         if (htmlError.response?.statusCode === 400 && options.parse_mode === 'HTML') {
           logger.warn('HTML parse error, retrying without parse_mode', { chatId });
           delete options.parse_mode;
-          await bot.sendMessage(chatId, text.replace(/<[^>]*>/g, ''), options);
-          logger.info('Message sent without HTML', { chatId });
+          try {
+            await bot.sendMessage(chatId, text.replace(/<[^>]*>/g, ''), options);
+            logger.info('Message sent without HTML', { chatId });
+          } catch (retryError) {
+            // Якщо і це не спрацювало, спробуємо з екрануванням HTML
+            const escapedText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            await bot.sendMessage(chatId, escapedText, { ...options, parse_mode: 'HTML' });
+            logger.info('Message sent with escaped HTML', { chatId });
+          }
         } else {
           throw htmlError;
         }
@@ -1393,12 +1400,14 @@ async function sendMessage(chatId, text, keyboard = null) {
       logger.warn('Invalid message format', { chatId, error: error.response.body });
       // Спробуємо відправити без HTML
       try {
-        const plainText = text.replace(/<[^>]*>/g, '');
-        await bot.sendMessage(chatId, plainText || 'Повідомлення', keyboard ? { reply_markup: keyboard.inline_keyboard ? keyboard : { keyboard: keyboard, resize_keyboard: true } } : {});
+        const plainText = typeof text === 'string' ? text.replace(/<[^>]*>/g, '') : String(text || '');
+        const retryOptions = keyboard ? { reply_markup: keyboard.inline_keyboard ? keyboard : { keyboard: keyboard, resize_keyboard: true } } : {};
+        await bot.sendMessage(chatId, plainText || 'Повідомлення', retryOptions);
         logger.info('Message sent as plain text after HTML error', { chatId });
       } catch (retryError) {
         logger.error('Failed to send message even as plain text', retryError, { chatId });
-        // Не кидаємо помилку далі, щоб не ламати весь процес
+        // Не показуємо помилку користувачу для /start команди, щоб не блокувати роботу
+        // Просто логуємо помилку
       }
     } else {
       logger.error('Failed to send message', error, { chatId });
