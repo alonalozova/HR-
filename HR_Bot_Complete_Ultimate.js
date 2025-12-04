@@ -705,6 +705,12 @@ async function initGoogleSheets() {
     // Ініціалізуємо всі необхідні вкладки з українськими назвами
     await initSheets();
     
+    // Ініціалізуємо всі модулі після підключення Google Sheets
+    if (typeof initializeModules === 'function') {
+      initializeModules();
+      console.log('✅ Модулі ініціалізовано');
+    }
+    
     return true;
   } catch (error) {
     console.warn('⚠️ Google Sheets недоступні:', error.message);
