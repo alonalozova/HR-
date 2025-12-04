@@ -2379,20 +2379,32 @@ async function showWelcomeMessage(chatId, telegramId, username, firstName, lastN
 // 📝 РЕЄСТРАЦІЯ КОРИСТУВАЧА
 async function startRegistration(chatId, telegramId, username, firstName, lastName) {
   try {
+    logger.info('Starting registration process', { telegramId, hasUsername: !!username, hasFirstName: !!firstName });
+    
+    // Очищаємо попередні дані реєстрації, якщо вони є
+    if (registrationCache.has(telegramId)) {
+      registrationCache.delete(telegramId);
+      logger.debug('Cleared existing registration data', { telegramId });
+    }
+    
     const welcomeText = `🌟 <b>Привіт зірочка!</b>
 
 Я бот-помічник розроблений твоїм HR. Вона створила мене, щоб полегшити і автоматизувати процеси. Я точно стану тобі в нагоді.
 
-Почну з того, що прошу тебе зареєструватися. Це потрібно, аби надалі я міг допомагати тобі.`;
+Почну з того, що прошу тебе зареєструватися. Це потрібно, аби надалі я міг допомагати тобі.
+
+<b>Крок 1 з 7:</b> Оберіть відділ:`;
 
     registrationCache.set(telegramId, {
       step: 'department',
       data: {
-        username: username,
-        firstName: firstName,
-        lastName: lastName
+        username: username || null,
+        firstName: firstName || null,
+        lastName: lastName || null
       }
     });
+    
+    logger.debug('Registration cache set', { telegramId, step: 'department' });
 
     const keyboard = {
       inline_keyboard: [
