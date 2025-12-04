@@ -2203,17 +2203,17 @@ async function showMainMenu(chatId, telegramId) {
 async function handleReplyKeyboard(chatId, telegramId, text) {
   try {
     const routes = {
-      '🏖️ Відпустки': showVacationMenu,
-      '🏠 Remote': showRemoteMenu,
-      '⏰ Спізнення': showLateMenu,
-      '🏥 Лікарняний': showSickMenu,
+      '🏖️ Відпустки': () => vacationHandler ? vacationHandler.showVacationMenu(chatId, telegramId) : showVacationMenu(chatId, telegramId),
+      '🏠 Remote': () => remoteHandler ? remoteHandler.showRemoteMenu(chatId, telegramId) : showRemoteMenu(chatId, telegramId),
+      '⏰ Спізнення': () => lateHandler ? lateHandler.showLateMenu(chatId, telegramId) : showLateMenu(chatId, telegramId),
+      '🏥 Лікарняний': () => sickHandler ? sickHandler.showSickMenu(chatId, telegramId) : showSickMenu(chatId, telegramId),
       '📊 Статистика': showStatsMenu,
       '🎯 Онбординг': showOnboardingMenu,
       '📋 Тет': showOneOnOneMenu,
       '❓ FAQ': showFAQMenu,
       '💬 Пропозиції': showSuggestionsMenu,
       '🚨 ASAP запит': showASAPMenu,
-      '📋 Затвердження': showApprovalsMenu,
+      '📋 Затвердження': () => approvalHandler ? approvalHandler.showApprovalsMenu(chatId, telegramId) : showApprovalsMenu(chatId, telegramId),
       '📋 На затвердження': showApprovalsMenu, // Для PM/TL
       '📈 Аналітика': showAnalyticsMenu,
       '📈 Аналітика компанії': showAnalyticsMenu, // Для CEO
