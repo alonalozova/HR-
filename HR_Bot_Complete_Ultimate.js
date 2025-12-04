@@ -876,20 +876,8 @@ async function processMessage(message) {
       return;
     }
     
-    // Валідація тексту
-    try {
-      validateMessageText(text);
-    } catch (error) {
-      logger.warn('Invalid message text', { telegramId, error: error.message });
-      await sendMessage(chatId, '❌ Невірний формат повідомлення.');
-      return;
-    }
-    
-    logger.info('Message received', { telegramId, textLength: text.length });
-    
-    // Перевірка на дублювання (використовуємо update_id з webhook, тут не потрібно)
-    
-    if (text === '/start') {
+    // Обробка команди /start (до валідації, бо це системна команда)
+    if (text === '/start' || text.startsWith('/start ')) {
       logger.info('Processing /start command', { telegramId });
       try {
         // Очищаємо кеш для перезавантаження даних з Google Sheets
