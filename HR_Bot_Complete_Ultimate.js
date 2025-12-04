@@ -921,14 +921,19 @@ async function processMessage(message) {
             
             logger.warn('User missing some data', { telegramId, missingFields });
             await sendMessage(chatId, `⚠️ <b>Увага!</b> Деякі ваші дані відсутні в системі (${missingFields.join(', ')}). Будь ласка, зверніться до HR для оновлення реєстрації або пройдіть реєстрацію через /start`);
+          } else {
+            await showMainMenu(chatId, telegramId);
           }
-          
-          await showMainMenu(chatId, telegramId);
         }
       } catch (error) {
+        logger.error('Error processing /start', error, { telegramId });
         console.error('❌ Помилка обробки /start:', error);
         console.error('❌ Stack:', error.stack);
-        await sendMessage(chatId, '❌ Помилка при обробці команди. Спробуйте ще раз.');
+        try {
+          await sendMessage(chatId, '❌ Помилка при обробці команди. Спробуйте ще раз.');
+        } catch (sendError) {
+          console.error('❌ Помилка відправки повідомлення про помилку:', sendError);
+        }
       }
       return;
     }
@@ -1012,7 +1017,19 @@ async function processMessage(message) {
     await sendMessage(chatId, '❓ Оберіть дію з меню нижче.');
     
   } catch (error) {
+    logger.error('Error in processMessage', error, { telegramId: message?.from?.id });
     console.error('❌ Помилка processMessage:', error);
+    console.error('❌ Stack:', error.stack);
+    
+    // Спробуємо відправити повідомлення про помилку
+    try {
+      const chatId = message?.chat?.id;
+      if (chatId) {
+        await sendMessage(chatId, '❌ Виникла помилка при обробці повідомлення. Спробуйте ще раз або зверніться до HR.');
+      }
+    } catch (sendError) {
+      console.error('❌ Помилка відправки повідомлення про помилку:', sendError);
+    }
   }
 }
 
@@ -1315,28 +1332,69 @@ function addBackButton(keyboard, telegramId, previousState = 'main_menu') {
 // 📤 ВІДПРАВКА ПОВІДОМЛЕНЬ
 async function sendMessage(chatId, text, keyboard = null) {
   try {
-    const options = { parse_mode: 'HTML' };
-    if (keyboard) {
-      if (keyboard.inline_keyboard) {
-        options.reply_markup = keyboard;
-      } else {
-        options.reply_markup = { keyboard: keyboard, resize_keyboard: true };
+    // Очищаємо текст від потенційно небезпечних HTML символів
+    // Але зберігаємо валідні HTML теги
+    if (text && typeof text === 'string') {
+      // Перевіряємо, чи текст містить валідні HTML теги
+      // Якщо є проблеми з HTML, спробуємо відправити без parse_mode
+      const hasInvalidHtml = /<[^>]*>/g.test(text) && !/<\/?[bisu]>/gi.test(text.replace(/<\/?[bisu]>/gi, ''));
+      
+      const options = {};
+      
+      // Використовуємо HTML parse_mode тільки якщо текст містить валідні HTML теги
+      if (text.includes('<b>') || text.includes('<i>') || text.includes('<u>') || text.includes('<s>') || text.includes('<code>') || text.includes('<pre>')) {
+        options.parse_mode = 'HTML';
       }
+      
+      if (keyboard) {
+        if (keyboard.inline_keyboard) {
+          options.reply_markup = keyboard;
+        } else {
+          options.reply_markup = { keyboard: keyboard, resize_keyboard: true };
+        }
+      }
+      
+      try {
+        await bot.sendMessage(chatId, text, options);
+        logger.info('Message sent successfully', { chatId, textLength: text.length });
+      } catch (htmlError) {
+        // Якщо помилка з HTML, спробуємо без parse_mode
+        if (htmlError.response?.statusCode === 400 && options.parse_mode === 'HTML') {
+          logger.warn('HTML parse error, retrying without parse_mode', { chatId });
+          delete options.parse_mode;
+          await bot.sendMessage(chatId, text.replace(/<[^>]*>/g, ''), options);
+          logger.info('Message sent without HTML', { chatId });
+        } else {
+          throw htmlError;
+        }
+      }
+    } else {
+      // Якщо текст не рядок, конвертуємо в рядок
+      const textStr = String(text || '');
+      const options = keyboard ? { reply_markup: keyboard.inline_keyboard ? keyboard : { keyboard: keyboard, resize_keyboard: true } } : {};
+      await bot.sendMessage(chatId, textStr, options);
+      logger.info('Message sent successfully', { chatId, textLength: textStr.length });
     }
-    
-    await bot.sendMessage(chatId, text, options);
-    logger.info('Message sent successfully', { chatId, textLength: text.length });
     
   } catch (error) {
     if (error.response?.statusCode === 403) {
       logger.warn('Bot blocked by user', { chatId });
-      throw new TelegramError('Бот заблокований користувачем', chatId);
+      // Не кидаємо помилку, щоб не ламати весь процес
+      return;
     } else if (error.response?.statusCode === 400) {
       logger.warn('Invalid message format', { chatId, error: error.response.body });
-      throw new TelegramError('Невірний формат повідомлення', chatId);
+      // Спробуємо відправити без HTML
+      try {
+        const plainText = text.replace(/<[^>]*>/g, '');
+        await bot.sendMessage(chatId, plainText || 'Повідомлення', keyboard ? { reply_markup: keyboard.inline_keyboard ? keyboard : { keyboard: keyboard, resize_keyboard: true } } : {});
+        logger.info('Message sent as plain text after HTML error', { chatId });
+      } catch (retryError) {
+        logger.error('Failed to send message even as plain text', retryError, { chatId });
+        // Не кидаємо помилку далі, щоб не ламати весь процес
+      }
     } else {
       logger.error('Failed to send message', error, { chatId });
-      throw new TelegramError('Помилка відправки повідомлення', chatId);
+      // Не кидаємо помилку, щоб не ламати весь процес
     }
   }
 }
