@@ -706,9 +706,17 @@ async function initGoogleSheets() {
     await initSheets();
     
     // Ініціалізуємо всі модулі після підключення Google Sheets
-    if (typeof initializeModules === 'function') {
-      initializeModules();
-      console.log('✅ Модулі ініціалізовано');
+    try {
+      if (typeof initializeModules === 'function') {
+        initializeModules();
+        console.log('✅ Модулі ініціалізовано');
+      } else {
+        console.warn('⚠️ initializeModules не знайдено, модулі не ініціалізовано');
+      }
+    } catch (moduleError) {
+      console.error('❌ Помилка ініціалізації модулів:', moduleError);
+      console.error('❌ Stack:', moduleError.stack);
+      // Продовжуємо роботу без модулів (fallback на старі функції)
     }
     
     return true;
