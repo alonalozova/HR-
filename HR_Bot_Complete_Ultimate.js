@@ -2387,12 +2387,9 @@ async function showWelcomeMessage(chatId, telegramId, username, firstName, lastN
 // 📝 РЕЄСТРАЦІЯ КОРИСТУВАЧА
 async function startRegistration(chatId, telegramId, username, firstName, lastName) {
   try {
-    logger.info('Starting registration process', { telegramId, hasUsername: !!username, hasFirstName: !!firstName });
-    
-    // Очищаємо попередні дані реєстрації, якщо вони є
+    // Очищаємо попередні дані реєстрації
     if (registrationCache.has(telegramId)) {
       registrationCache.delete(telegramId);
-      logger.debug('Cleared existing registration data', { telegramId });
     }
     
     const welcomeText = `🌟 <b>Привіт зірочка!</b>
@@ -2403,6 +2400,7 @@ async function startRegistration(chatId, telegramId, username, firstName, lastNa
 
 <b>Крок 1 з 7:</b> Оберіть відділ:`;
 
+    // Зберігаємо дані реєстрації
     registrationCache.set(telegramId, {
       step: 'department',
       data: {
@@ -2411,8 +2409,6 @@ async function startRegistration(chatId, telegramId, username, firstName, lastNa
         lastName: lastName || null
       }
     });
-    
-    logger.debug('Registration cache set', { telegramId, step: 'department' });
 
     const keyboard = {
       inline_keyboard: [
@@ -2431,18 +2427,10 @@ async function startRegistration(chatId, telegramId, username, firstName, lastNa
       ]
     };
 
-    logger.info('Sending registration message with keyboard', { telegramId, chatId, keyboardRows: keyboard.inline_keyboard.length });
     await sendMessage(chatId, welcomeText, keyboard);
-    logger.info('Registration message sent successfully', { telegramId });
   } catch (error) {
-    logger.error('Error in startRegistration', error, { telegramId, chatId });
     console.error('❌ Помилка startRegistration:', error);
-    console.error('❌ Stack:', error.stack);
-    try {
-      await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
-    } catch (sendError) {
-      console.error('❌ Could not send error message:', sendError);
-    }
+    await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
   }
 }
 
