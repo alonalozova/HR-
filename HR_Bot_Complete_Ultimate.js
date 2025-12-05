@@ -2431,9 +2431,18 @@ async function startRegistration(chatId, telegramId, username, firstName, lastNa
       ]
     };
 
+    logger.info('Sending registration message with keyboard', { telegramId, chatId, keyboardRows: keyboard.inline_keyboard.length });
     await sendMessage(chatId, welcomeText, keyboard);
+    logger.info('Registration message sent successfully', { telegramId });
   } catch (error) {
+    logger.error('Error in startRegistration', error, { telegramId, chatId });
     console.error('❌ Помилка startRegistration:', error);
+    console.error('❌ Stack:', error.stack);
+    try {
+      await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
+    } catch (sendError) {
+      console.error('❌ Could not send error message:', sendError);
+    }
   }
 }
 
