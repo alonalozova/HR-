@@ -1233,8 +1233,16 @@ async function processCallback(callbackQuery) {
       }
     };
     
+    // Обробка callback'ів
     if (routes[data]) {
-      await routes[data]();
+      try {
+        await routes[data]();
+      } catch (routeError) {
+        logger.error('Error in callback route', routeError, { telegramId, callbackData: data });
+        console.error('❌ Помилка обробки callback:', routeError);
+        console.error('❌ Stack:', routeError.stack);
+        await sendMessage(chatId, '❌ Помилка при обробці запиту. Спробуйте ще раз.');
+      }
     } else if (data.startsWith('department_')) {
       const department = data.replace('department_', '');
       await handleDepartmentSelection(chatId, telegramId, department);
@@ -5140,7 +5148,7 @@ ${message}`;
 // Початок реєстрації з callback
 async function startRegistrationFromCallback(chatId, telegramId) {
   try {
-    logger.info('Starting registration from callback', { telegramId });
+    logger.info('Starting registration from callback', { telegramId, chatId });
     
     // Очищаємо кеш користувача, щоб почати з чистої сторінки
     if (userCache.has(telegramId)) {
@@ -5165,24 +5173,35 @@ async function startRegistrationFromCallback(chatId, telegramId) {
         username = chatMember.user.username || null;
         firstName = chatMember.user.first_name || null;
         lastName = chatMember.user.last_name || null;
+        logger.debug('Got user data from Telegram', { telegramId, hasFirstName: !!firstName });
       }
     } catch (telegramError) {
       logger.warn('Could not get chat member, using defaults', { telegramId, error: telegramError.message });
-      // Продовжуємо з null значеннями
+      // Продовжуємо з null значеннями - це нормально
     }
     
+    // Викликаємо startRegistration
+    logger.info('Calling startRegistration', { telegramId, hasFirstName: !!firstName });
     await startRegistration(chatId, telegramId, username, firstName, lastName);
+    logger.info('startRegistration completed successfully', { telegramId });
+    
   } catch (error) {
-    logger.error('Error in startRegistrationFromCallback', error, { telegramId });
+    logger.error('Error in startRegistrationFromCallback', error, { telegramId, chatId });
     console.error('❌ Помилка startRegistrationFromCallback:', error);
     console.error('❌ Stack:', error.stack);
     
     // Fallback - спробуємо почати реєстрацію з null значеннями
     try {
+      logger.info('Trying fallback registration', { telegramId });
       await startRegistration(chatId, telegramId, null, null, null);
     } catch (fallbackError) {
       logger.error('Fallback registration also failed', fallbackError, { telegramId });
-      await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
+      console.error('❌ Fallback registration failed:', fallbackError);
+      try {
+        await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
+      } catch (sendError) {
+        console.error('❌ Could not send error message:', sendError);
+      }
     }
   }
 }
