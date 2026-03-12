@@ -3,13 +3,13 @@
  * Система навігації для збереження попередніх станів меню
  */
 
-const CacheWithTTL = require('./cache');
+const { HybridCache } = require('./cache');
 const config = require('../config');
 
 class NavigationStack {
   constructor() {
-    // Кеш для збереження історії навігації (10 хвилин TTL)
-    this.navigationHistory = new CacheWithTTL(1000, 10 * 60 * 1000);
+    // Кеш для збереження історії навігації (10 хвилин TTL, Redis-підтримка)
+    this.navigationHistory = new HybridCache('navigation', 1000, 10 * 60 * 1000);
   }
 
   /**

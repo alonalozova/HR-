@@ -70,11 +70,8 @@ class ApprovalHandler {
 
       if (!this.doc) {
         logger.warn('Google Sheets not connected in showApprovalVacations');
-        const reconnected = await this.initGoogleSheets();
-        if (!reconnected || !this.doc) {
-          await this.sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до адміністратора.');
-          return;
-        }
+        await this.sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до адміністратора.');
+        return;
       }
 
       return await this.sheetsQueue.add(async () => {
@@ -296,11 +293,8 @@ class ApprovalHandler {
 
       if (!this.doc) {
         logger.warn('Google Sheets not connected in showApprovalRemote');
-        const reconnected = await this.initGoogleSheets();
-        if (!reconnected || !this.doc) {
-          await this.sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до адміністратора.');
-          return;
-        }
+        await this.sendMessage(chatId, '❌ Google Sheets не підключено. Спробуйте пізніше або зверніться до адміністратора.');
+        return;
       }
 
       return await this.sheetsQueue.add(async () => {

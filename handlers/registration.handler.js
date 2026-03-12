@@ -83,16 +83,16 @@ class RegistrationHandler {
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '📢 Marketing', callback_data: 'reg_department_Marketing' },
-            { text: '🎨 Design', callback_data: 'reg_department_Design' }
+            { text: '📢 Marketing', callback_data: 'department_Marketing' },
+            { text: '🎨 Design', callback_data: 'department_Design' }
           ],
           [
-            { text: '📱 SMM', callback_data: 'reg_department_SMM' },
-            { text: '💼 Sales', callback_data: 'reg_department_Sales and communication' }
+            { text: '📱 SMM', callback_data: 'department_SMM' },
+            { text: '💼 Sales', callback_data: 'department_Sales and communication' }
           ],
           [
-            { text: '👥 HR', callback_data: 'reg_department_HR' },
-            { text: '👑 CEO', callback_data: 'reg_department_CEO' }
+            { text: '👥 HR', callback_data: 'department_HR' },
+            { text: '👑 CEO', callback_data: 'department_CEO' }
           ]
         ]
       };
@@ -122,7 +122,7 @@ class RegistrationHandler {
       
       const keyboard = {
         inline_keyboard: teams.map(team => [
-          { text: team, callback_data: `reg_team_${team}` }
+          { text: team, callback_data: `team_${team}` }
         ])
       };
 
@@ -151,7 +151,7 @@ class RegistrationHandler {
       
       const keyboard = {
         inline_keyboard: positions.map(position => [
-          { text: position, callback_data: `reg_position_${position}` }
+          { text: position, callback_data: `position_${position}` }
         ])
       };
 
@@ -173,10 +173,10 @@ class RegistrationHandler {
       }
 
       regData.data.position = position;
-      regData.step = 'birth_date';
+      regData.step = 'name';
       this.registrationCache.set(telegramId, regData);
 
-      await this.sendMessage(chatId, `✅ <b>Посада:</b> ${position}\n\n<b>Крок 4 з 7:</b> Вкажіть дату народження (ДД.ММ.РРРР):`);
+      await this.sendMessage(chatId, `✅ <b>Посада:</b> ${position}\n\n<b>Крок 4 з 7:</b> Введіть ваше ім'я:`);
     } catch (error) {
       logger.error('Error in handlePositionSelection', error, { telegramId });
     }

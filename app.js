@@ -7,7 +7,7 @@
 const express = require('express');
 const config = require('./config');
 const logger = require('./utils/logger');
-const CacheWithTTL = require('./utils/cache');
+const { HybridCache } = require('./utils/cache');
 const { AppError } = require('./utils/errors');
 const SheetsService = require('./services/sheets.service');
 const TelegramService = require('./services/telegram.service');
@@ -24,12 +24,14 @@ const telegramService = new TelegramService(config.BOT_TOKEN);
 const sheetsService = new SheetsService();
 const userService = new UserService(sheetsService);
 
-// Кеші
-const processedUpdates = new CacheWithTTL(
+// Кеші з підтримкою Redis (якщо REDIS_URL встановлено)
+const processedUpdates = new HybridCache(
+  'processed',
   config.CACHE.PROCESSED_UPDATES.maxSize,
   config.CACHE.PROCESSED_UPDATES.ttl
 );
-const registrationCache = new CacheWithTTL(
+const registrationCache = new HybridCache(
+  'registration',
   config.CACHE.REGISTRATION_CACHE.maxSize,
   config.CACHE.REGISTRATION_CACHE.ttl
 );

@@ -106,10 +106,22 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
    */
   async showVacationForm(chatId, telegramId) {
     try {
-      const user = await this.getUserInfo(telegramId);
-      if (!user) {
-        await this.sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
-        return;
+      logger.info('showVacationForm called', { telegramId });
+      
+      // Спробуємо знайти користувача в кеші спочатку
+      let user = this.userCache?.get?.(telegramId);
+      if (user) {
+        logger.info('User found in cache', { telegramId, fullName: user.fullName });
+      } else {
+        // Якщо не в кеші, шукаємо через getUserInfo
+        user = await this.getUserInfo(telegramId);
+        if (user) {
+          logger.info('User found via getUserInfo', { telegramId, fullName: user.fullName });
+        } else {
+          logger.warn('User not found', { telegramId });
+          await this.sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію через /start');
+          return;
+        }
       }
 
       const text = `📝 <b>Заявка на відпустку</b>
@@ -122,12 +134,14 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
 
 📅 <b>Дата початку</b> (ДД.ММ.РРРР):`;
 
-      this.registrationCache.set(telegramId, {
+      const cacheData = {
         step: 'vacation_start_date',
-        data: { type: 'vacation' }
-      });
+        data: { type: 'vacation' },
+        timestamp: Date.now()
+      };
       
-      logger.debug('showVacationForm: Cache set', { telegramId });
+      this.registrationCache.set(telegramId, cacheData);
+      logger.debug('showVacationForm: Cache set', { telegramId, step: cacheData.step });
 
       await this.sendMessage(chatId, text);
     } catch (error) {
@@ -249,8 +263,27 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
   async handleVacationProcess(chatId, telegramId, text) {
     try {
       const regData = this.registrationCache.get(telegramId);
-      logger.debug('handleVacationProcess', { telegramId, hasRegData: !!regData, step: regData?.step, text });
-      if (!regData) return false;
+      logger.info('handleVacationProcess called', { telegramId, hasRegData: !!regData, step: regData?.step, text, dataType: regData?.data?.type });
+      console.log('🔍 handleVacationProcess: telegramId=', telegramId, 'text=', text);
+      console.log('🔍 handleVacationProcess: regData=', regData);
+      console.log('🔍 handleVacationProcess: cache size=', this.registrationCache.size ? this.registrationCache.size() : 'N/A');
+      
+      if (!regData) {
+        logger.warn('No registration data found for vacation process', { telegramId });
+        console.log('❌ Немає даних реєстрації для процесу відпустки');
+        return false;
+      }
+      
+      // Перевіряємо, чи це процес відпустки
+      const isVacationProcess = regData.step?.startsWith('vacation_') || 
+                                regData.step?.startsWith('emergency_vacation_') ||
+                                regData.data?.type === 'vacation' || 
+                                regData.data?.type === 'emergency_vacation';
+      
+      if (!isVacationProcess) {
+        logger.debug('Not a vacation process', { telegramId, step: regData.step, dataType: regData.data?.type });
+        return false;
+      }
       
       // Обробка екстреної відпустки
       if (regData.step === 'emergency_vacation_start_date') {
@@ -288,11 +321,17 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
           await this.sendMessage(chatId, `⚠️ <b>Увага!</b> Ви вказали дату в минулому (${text}). Екстрена відпустка може бути зафіксована ретроспективно. Продовжити?`, keyboard);
           regData.step = 'emergency_vacation_confirm_past_date';
           regData.data.startDate = startDate;
+          this.registrationCache.set(telegramId, regData); // Зберігаємо оновлені дані
+          logger.debug('Emergency vacation past date confirmation needed', { telegramId, startDate: text });
           return true;
         }
         
         regData.data.startDate = startDate;
         regData.step = 'emergency_vacation_days';
+        this.registrationCache.set(telegramId, regData); // Зберігаємо оновлені дані
+        logger.info('Emergency vacation start date saved', { telegramId, startDate: text, step: regData.step });
+        console.log('✅ Збережено дату початку екстреної відпустки:', text, 'для', telegramId);
+        console.log('✅ Оновлені дані в кеші:', this.registrationCache.get(telegramId));
         await this.sendMessage(chatId, `📅 <b>Дата початку:</b> ${text}\n\n📊 <b>Вкажіть кількість днів відпустки</b>\n\nВведіть кількість днів (1-7):`);
         return true;
       }
@@ -319,6 +358,8 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
         
         regData.data.days = days;
         regData.step = 'emergency_vacation_reason';
+        this.registrationCache.set(telegramId, regData); // Зберігаємо оновлені дані
+        logger.debug('Emergency vacation days saved', { telegramId, days });
         await this.sendMessage(chatId, `📊 <b>Кількість днів:</b> ${days}\n\n🔒 <b>ВАЖЛИВО! Конфіденційна інформація</b>\n\n📝 <b>Опишіть причину екстреної відпустки:</b>\n\n⚠️ Ця інформація буде доступна тільки HR і CEO агенції.`);
         return true;
       }
@@ -412,10 +453,22 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
    */
   async showEmergencyVacationForm(chatId, telegramId) {
     try {
-      const user = await this.getUserInfo(telegramId);
-      if (!user) {
-        await this.sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію.');
-        return;
+      logger.info('showEmergencyVacationForm called', { telegramId });
+      
+      // Спробуємо знайти користувача в кеші спочатку
+      let user = this.userCache?.get?.(telegramId);
+      if (user) {
+        logger.info('User found in cache', { telegramId, fullName: user.fullName });
+      } else {
+        // Якщо не в кеші, шукаємо через getUserInfo
+        user = await this.getUserInfo(telegramId);
+        if (user) {
+          logger.info('User found via getUserInfo', { telegramId, fullName: user.fullName });
+        } else {
+          logger.warn('User not found', { telegramId });
+          await this.sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію через /start');
+          return;
+        }
       }
 
       const text = `🚨 <b>Екстрена відпустка</b>
@@ -431,10 +484,14 @@ ${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку післ
 
 <b>Введіть дату початку відпустки</b> (ДД.ММ.РРРР):`;
 
-      this.registrationCache.set(telegramId, {
+      const cacheData = {
         step: 'emergency_vacation_start_date',
-        data: { type: 'emergency_vacation' }
-      });
+        data: { type: 'emergency_vacation' },
+        timestamp: Date.now()
+      };
+      
+      this.registrationCache.set(telegramId, cacheData);
+      logger.debug('Emergency vacation form cache set', { telegramId, step: cacheData.step });
 
       await this.sendMessage(chatId, text);
     } catch (error) {

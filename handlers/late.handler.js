@@ -254,3 +254,4 @@ ${stats.count >= 7 ? '⚠️ Досягнуто ліміт спізнень!' : 
 
 module.exports = LateHandler;
 
+

@@ -4,7 +4,7 @@
  */
 
 const SheetsService = require('./sheets.service');
-const CacheWithTTL = require('../utils/cache');
+const { HybridCache } = require('../utils/cache');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { executeWithRetryAndMonitor } = require('../utils/retry');
@@ -12,7 +12,8 @@ const { executeWithRetryAndMonitor } = require('../utils/retry');
 class UserService {
   constructor(sheetsService) {
     this.sheetsService = sheetsService;
-    this.userCache = new CacheWithTTL(
+    this.userCache = new HybridCache(
+      'users',
       config.CACHE.USER_CACHE.maxSize,
       config.CACHE.USER_CACHE.ttl
     );

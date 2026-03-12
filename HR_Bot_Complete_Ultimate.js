@@ -897,11 +897,14 @@ async function processMessage(message) {
         // Завантажуємо дані користувача з Google Sheets
         const user = await getUserInfo(telegramId);
         logger.info('User lookup result', { telegramId, found: !!user, hasName: !!user?.fullName });
+        console.log(`🔍 /start: Перевірка користувача ${telegramId}, знайдено: ${!!user}`);
         
         if (!user) {
           logger.info('User not registered, showing welcome', { telegramId });
+          console.log(`📝 Користувач ${telegramId} не знайдений, показуємо привітання з реєстрацією`);
           await showWelcomeMessage(chatId, telegramId, username, firstName, lastName);
         } else {
+          console.log(`✅ Користувач ${telegramId} знайдений в системі, показуємо головне меню`);
           // Нормалізуємо дані користувача (підтримуємо обидва формати)
           const normalizedUser = {
             fullName: user.fullName || user.FullName || '',
@@ -928,6 +931,7 @@ async function processMessage(message) {
             if (!normalizedUser.position) missingFields.push('посада');
             
             logger.warn('User missing some data', { telegramId, missingFields });
+            console.log(`⚠️ Користувач ${telegramId} має неповні дані. Відсутні: ${missingFields.join(', ')}`);
             
             // Пропонуємо почати реєстрацію
             const keyboard = {
@@ -994,33 +998,85 @@ async function processMessage(message) {
       return;
     }
     
+    // Перевіряємо, чи є активний процес в кеші (пріоритет над загальними командами)
+    const regData = registrationCache.get(telegramId);
+    logger.info('Processing message', { telegramId, text, hasRegData: !!regData, step: regData?.step, dataType: regData?.data?.type });
+    console.log('🔍 processMessage: telegramId=', telegramId, 'text=', text, 'regData=', regData);
+    
     // Обробка відпусток (пріоритет над реєстрацією)
-    console.log('🔍 processMessage: Перевіряємо handleVacationProcess для', telegramId, 'текст:', text);
-    if (vacationHandler && await vacationHandler.handleVacationProcess(chatId, telegramId, text)) {
-      console.log('✅ handleVacationProcess обробив повідомлення');
-      return;
+    // Перевіряємо спочатку, чи це не процес відпустки
+    if (regData && (regData.step?.startsWith('vacation_') || regData.step?.startsWith('emergency_vacation_'))) {
+      logger.info('Vacation process detected in main cache', { telegramId, step: regData.step, dataType: regData.data?.type });
+      console.log('✅ Виявлено процес відпустки в основному кеші:', regData.step);
+      
+      if (vacationHandler) {
+        // Передаємо дані в handler, щоб він міг їх використати
+        const handled = await vacationHandler.handleVacationProcess(chatId, telegramId, text);
+        if (handled) {
+          logger.info('Vacation process handled successfully', { telegramId, step: regData.step });
+          console.log('✅ Процес відпустки успішно оброблено');
+          return;
+        } else {
+          logger.warn('Vacation handler returned false', { telegramId, step: regData.step });
+          console.log('⚠️ Handler повернув false для процесу відпустки');
+        }
+      }
+    }
+    
+    // Спробуємо обробити через handler напряму (для сумісності, якщо дані в handler кеші)
+    if (vacationHandler) {
+      const handled = await vacationHandler.handleVacationProcess(chatId, telegramId, text);
+      if (handled) {
+        logger.info('Vacation process handled by handler directly', { telegramId });
+        console.log('✅ Процес відпустки оброблено через handler');
+        return;
+      }
     }
     
     // Обробка спізнень
-    if (lateHandler && await lateHandler.handleLateProcess(chatId, telegramId, text)) {
+    if (regData && regData.step?.startsWith('late_')) {
+      logger.debug('Late process detected', { telegramId, step: regData.step });
+      if (lateHandler && await lateHandler.handleLateProcess(chatId, telegramId, text)) {
+        logger.info('Late process handled', { telegramId });
+        return;
+      }
+    } else if (lateHandler && await lateHandler.handleLateProcess(chatId, telegramId, text)) {
+      logger.info('Late process handled by handler', { telegramId });
       return;
     }
     
     // Обробка Remote
-    if (remoteHandler && await remoteHandler.handleRemoteProcess(chatId, telegramId, text)) {
+    if (regData && regData.step?.startsWith('remote_')) {
+      logger.debug('Remote process detected', { telegramId, step: regData.step });
+      if (remoteHandler && await remoteHandler.handleRemoteProcess(chatId, telegramId, text)) {
+        logger.info('Remote process handled', { telegramId });
+        return;
+      }
+    } else if (remoteHandler && await remoteHandler.handleRemoteProcess(chatId, telegramId, text)) {
+      logger.info('Remote process handled by handler', { telegramId });
       return;
     }
     
     // Обробка лікарняного
-    if (sickHandler && await sickHandler.handleSickProcess(chatId, telegramId, text)) {
+    if (regData && regData.step?.startsWith('sick_')) {
+      logger.debug('Sick process detected', { telegramId, step: regData.step });
+      if (sickHandler && await sickHandler.handleSickProcess(chatId, telegramId, text)) {
+        logger.info('Sick process handled', { telegramId });
+        return;
+      }
+    } else if (sickHandler && await sickHandler.handleSickProcess(chatId, telegramId, text)) {
+      logger.info('Sick process handled by handler', { telegramId });
       return;
     }
     
-    // Обробка реєстрації
-    if (registrationCache.has(telegramId)) {
-      // Реєстрація обробляється через handleRegistrationStep (залишаємо як є, бо там складніша логіка)
+    // Обробка реєстрації (тільки якщо це не інший процес)
+    if (regData && (regData.step === 'department' || regData.step === 'team' || regData.step === 'position' || 
+        regData.step === 'name' || regData.step === 'surname' || regData.step === 'birthdate' || 
+        regData.step === 'firstworkday')) {
+      logger.debug('Registration process detected', { telegramId, step: regData.step });
       const handled = await handleRegistrationStep(chatId, telegramId, text);
       if (handled) {
+        logger.info('Registration step handled', { telegramId, step: regData.step });
         return; // Реєстрація оброблена, не показуємо загальне меню
       }
     }
@@ -1032,6 +1088,8 @@ async function processMessage(message) {
     
     // AI помічник видалено
     
+    // Якщо нічого не оброблено, показуємо загальне повідомлення
+    logger.debug('No process matched, showing default message', { telegramId, text });
     await sendMessage(chatId, '❓ Оберіть дію з меню нижче.');
     
   } catch (error) {
@@ -1145,8 +1203,97 @@ async function processCallback(callbackQuery) {
       'approvals_vacations': () => approvalHandler ? approvalHandler.showApprovalVacations(chatId, telegramId) : showApprovalVacations(chatId, telegramId),
       'approval_vacations': () => approvalHandler ? approvalHandler.showApprovalVacations(chatId, telegramId) : showApprovalVacations(chatId, telegramId), // Альтернативний callback
       'approvals_remote': () => approvalHandler ? approvalHandler.showApprovalRemote(chatId, telegramId) : showApprovalRemote(chatId, telegramId),
-      'analytics_hr': () => showHRAnalytics(chatId, telegramId),
+      'analytics_hr': () => showAnalyticsMenu(chatId, telegramId),
       'analytics_ceo': () => showCEOAnalytics(chatId, telegramId),
+      'hr_panel': () => showHRPanel(chatId, telegramId),
+      'hr_users': () => showHRUsersMenu(chatId, telegramId),
+      'hr_reports': () => showHRReportsMenu(chatId, telegramId),
+      'hr_settings': () => showHRSettingsMenu(chatId, telegramId),
+      'hr_dashboard': () => showHRDashboardStats(chatId, telegramId),
+      'hr_reports_vacations': async () => {
+        logger.info('HR reports vacations callback', { telegramId, chatId });
+        console.log('📊 HR reports vacations callback:', { telegramId, chatId });
+        console.log('📊 approvalHandler доступний:', !!approvalHandler);
+        console.log('📊 showApprovalVacations доступна:', typeof showApprovalVacations === 'function');
+        try {
+          if (approvalHandler && typeof approvalHandler.showApprovalVacations === 'function') {
+            console.log('✅ Використовуємо approvalHandler.showApprovalVacations');
+            await approvalHandler.showApprovalVacations(chatId, telegramId);
+            console.log('✅ approvalHandler.showApprovalVacations виконано');
+          } else {
+            console.log('✅ Використовуємо showApprovalVacations напряму');
+            await showApprovalVacations(chatId, telegramId);
+            console.log('✅ showApprovalVacations виконано');
+          }
+        } catch (error) {
+          logger.error('Error in hr_reports_vacations', error, { telegramId });
+          console.error('❌ Помилка в hr_reports_vacations:', error);
+          console.error('❌ Stack:', error.stack);
+          try {
+            await sendMessage(chatId, `❌ Помилка завантаження звіту по відпустках: ${error.message || 'невідома помилка'}. Спробуйте пізніше.`);
+          } catch (sendError) {
+            console.error('❌ Не вдалося відправити повідомлення про помилку:', sendError);
+          }
+        }
+      },
+      'hr_reports_remote': async () => {
+        logger.info('HR reports remote callback', { telegramId, chatId });
+        console.log('📊 HR reports remote callback:', { telegramId, chatId });
+        console.log('📊 approvalHandler доступний:', !!approvalHandler);
+        console.log('📊 showApprovalRemote доступна:', typeof showApprovalRemote === 'function');
+        try {
+          if (approvalHandler && typeof approvalHandler.showApprovalRemote === 'function') {
+            console.log('✅ Використовуємо approvalHandler.showApprovalRemote');
+            await approvalHandler.showApprovalRemote(chatId, telegramId);
+            console.log('✅ approvalHandler.showApprovalRemote виконано');
+          } else {
+            console.log('✅ Використовуємо showApprovalRemote напряму');
+            await showApprovalRemote(chatId, telegramId);
+            console.log('✅ showApprovalRemote виконано');
+          }
+        } catch (error) {
+          logger.error('Error in hr_reports_remote', error, { telegramId });
+          console.error('❌ Помилка в hr_reports_remote:', error);
+          console.error('❌ Stack:', error.stack);
+          try {
+            await sendMessage(chatId, `❌ Помилка завантаження звіту по Remote: ${error.message || 'невідома помилка'}. Спробуйте пізніше.`);
+          } catch (sendError) {
+            console.error('❌ Не вдалося відправити повідомлення про помилку:', sendError);
+          }
+        }
+      },
+      'hr_reports_lates': async () => {
+        logger.info('HR reports lates callback', { telegramId, chatId });
+        console.log('📊 HR reports lates callback:', { telegramId, chatId });
+        try {
+          await showHRDashboardStats(chatId, telegramId);
+        } catch (error) {
+          logger.error('Error in hr_reports_lates', error, { telegramId });
+          console.error('❌ Помилка в hr_reports_lates:', error);
+          await sendMessage(chatId, `❌ Помилка завантаження звіту по спізненнях. Спробуйте пізніше.`);
+        }
+      },
+      'hr_reports_sick': async () => {
+        logger.info('HR reports sick callback', { telegramId, chatId });
+        console.log('📊 HR reports sick callback:', { telegramId, chatId });
+        try {
+          await showHRDashboardStats(chatId, telegramId);
+        } catch (error) {
+          logger.error('Error in hr_reports_sick', error, { telegramId });
+          console.error('❌ Помилка в hr_reports_sick:', error);
+          await sendMessage(chatId, `❌ Помилка завантаження звіту по лікарняних. Спробуйте пізніше.`);
+        }
+      },
+      'hr_users_list': () => showHRExportEmployeeList(chatId, telegramId),
+      'hr_users_search': () => showHRExportEmployee(chatId, telegramId),
+      'hr_users_add': () => sendMessage(chatId, '📝 Функція додавання працівника в розробці. Використовуйте реєстрацію через /start'),
+      'hr_users_edit': () => sendMessage(chatId, '✏️ Функція редагування даних в розробці. Зверніться до адміністратора для змін.'),
+      'hr_users_roles': () => sendMessage(chatId, '👑 Функція управління ролями в розробці. Ролі визначаються автоматично на основі посади та відділу.'),
+      'hr_settings_notifications': () => sendMessage(chatId, '🔔 Налаштування сповіщень в розробці.'),
+      'hr_settings_holidays': () => sendMessage(chatId, '📅 Календар свят в розробці.'),
+      'hr_settings_rules': () => sendMessage(chatId, '📋 Бізнес-правила в розробці.'),
+      'hr_settings_integrations': () => sendMessage(chatId, '🔗 Інтеграції в розробці.'),
+      'hr_settings_security': () => sendMessage(chatId, '🔐 Налаштування безпеки в розробці.'),
       'hr_mailings': () => showMailingsMenu(chatId, telegramId),
       'hr_export': () => showHRExportMenu(chatId, telegramId),
       'hr_export_employee': () => showHRExportEmployee(chatId, telegramId),
@@ -1199,6 +1346,9 @@ async function processCallback(callbackQuery) {
             'showApprovalsMenu': () => showApprovalsMenu(chatId, telegramId),
             'showAnalyticsMenu': () => showAnalyticsMenu(chatId, telegramId),
             'showHRPanel': () => showHRPanel(chatId, telegramId),
+            'showHRUsersMenu': () => showHRUsersMenu(chatId, telegramId),
+            'showHRReportsMenu': () => showHRReportsMenu(chatId, telegramId),
+            'showHRSettingsMenu': () => showHRSettingsMenu(chatId, telegramId),
             'showCEOPanel': () => showCEOPanel(chatId, telegramId),
             'showMailingsMenu': () => showMailingsMenu(chatId, telegramId),
             'showHRExportMenu': () => showHRExportMenu(chatId, telegramId),
@@ -1234,14 +1384,33 @@ async function processCallback(callbackQuery) {
     };
     
     // Обробка callback'ів
+    logger.info('Processing callback', { telegramId, callbackData: data, hasRoute: !!routes[data] });
+    console.log('🔍 processCallback: data=', data, 'telegramId=', telegramId, 'chatId=', chatId);
+    console.log('🔍 Available routes:', Object.keys(routes).filter(k => k.includes('hr_reports')));
+    
     if (routes[data]) {
       try {
-        await routes[data]();
+        logger.info('Executing callback route', { telegramId, callbackData: data });
+        console.log('✅ Виконуємо callback route:', data);
+        const routeFunction = routes[data];
+        if (typeof routeFunction === 'function') {
+          await routeFunction();
+          logger.info('Callback route executed successfully', { telegramId, callbackData: data });
+          console.log('✅ Callback route виконано успішно');
+        } else {
+          logger.error('Route is not a function', { telegramId, callbackData: data, routeType: typeof routeFunction });
+          console.error('❌ Route не є функцією:', typeof routeFunction);
+          await sendMessage(chatId, '❌ Помилка: маршрут не знайдено.');
+        }
       } catch (routeError) {
         logger.error('Error in callback route', routeError, { telegramId, callbackData: data });
         console.error('❌ Помилка обробки callback:', routeError);
         console.error('❌ Stack:', routeError.stack);
-        await sendMessage(chatId, '❌ Помилка при обробці запиту. Спробуйте ще раз.');
+        try {
+          await sendMessage(chatId, `❌ Помилка при обробці запиту: ${routeError.message || 'невідома помилка'}. Спробуйте ще раз.`);
+        } catch (sendError) {
+          logger.error('Failed to send error message', sendError, { telegramId });
+        }
       }
     } else if (data.startsWith('department_')) {
       const department = data.replace('department_', '');
@@ -1461,9 +1630,12 @@ function mapRowToUserData(row, sheetTitle) {
  */
 async function getUserInfo(telegramId) {
   try {
+    logger.debug('getUserInfo called', { telegramId });
+    
     // Перевіряємо кеш (CacheWithTTL сам перевіряє TTL)
     if (userCache.has(telegramId)) {
       const cached = userCache.get(telegramId);
+      logger.info('User found in cache', { telegramId, fullName: cached?.fullName });
       console.log(`✅ Користувач ${telegramId} знайдено в кеші: ${cached?.fullName || 'без імені'}`);
       return cached;
       }
@@ -1515,8 +1687,9 @@ async function getUserInfo(telegramId) {
             userCache.set(telegramId, userData);
             // Додаємо в індекс для швидкого пошуку
             userIndex.add(userData);
+            logger.info('User loaded from Google Sheets and cached', { telegramId, fullName: userData.fullName });
             console.log(`✅ Користувач ${telegramId} (${userData.fullName}) завантажено з Google Sheets та додано в кеш`);
-      return userData;
+            return userData;
           }
         }
         
@@ -2387,9 +2560,12 @@ async function showWelcomeMessage(chatId, telegramId, username, firstName, lastN
 // 📝 РЕЄСТРАЦІЯ КОРИСТУВАЧА
 async function startRegistration(chatId, telegramId, username, firstName, lastName) {
   try {
+    logger.info('Starting registration process', { telegramId, username, firstName, lastName });
+    
     // Очищаємо попередні дані реєстрації
     if (registrationCache.has(telegramId)) {
       registrationCache.delete(telegramId);
+      logger.debug('Cleared previous registration data', { telegramId });
     }
     
     const welcomeText = `🌟 <b>Привіт зірочка!</b>
@@ -2401,14 +2577,18 @@ async function startRegistration(chatId, telegramId, username, firstName, lastNa
 <b>Крок 1 з 7:</b> Оберіть відділ:`;
 
     // Зберігаємо дані реєстрації
-    registrationCache.set(telegramId, {
+    const regData = {
       step: 'department',
       data: {
         username: username || null,
         firstName: firstName || null,
         lastName: lastName || null
-      }
-    });
+      },
+      timestamp: Date.now()
+    };
+    
+    registrationCache.set(telegramId, regData);
+    logger.debug('Registration data saved', { telegramId, step: regData.step });
 
     const keyboard = {
       inline_keyboard: [
@@ -2428,45 +2608,87 @@ async function startRegistration(chatId, telegramId, username, firstName, lastNa
     };
 
     await sendMessage(chatId, welcomeText, keyboard);
+    logger.info('Registration welcome message sent', { telegramId });
   } catch (error) {
+    logger.error('Error in startRegistration', error, { telegramId });
     console.error('❌ Помилка startRegistration:', error);
-    await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
+    console.error('❌ Stack:', error.stack);
+    try {
+      await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
+    } catch (sendError) {
+      logger.error('Failed to send error message', sendError, { telegramId });
+    }
   }
 }
 
 // 🏢 ВИБІР ВІДДІЛУ
 async function handleDepartmentSelection(chatId, telegramId, department) {
   try {
-    const regData = registrationCache.get(telegramId);
-    if (!regData) return;
+    logger.info('Handling department selection', { telegramId, department });
+    
+    let regData = registrationCache.get(telegramId);
+    if (!regData) {
+      logger.warn('No registration data found, creating new', { telegramId });
+      // Якщо немає даних реєстрації, створюємо нові
+      regData = {
+        step: 'department',
+        data: {},
+        timestamp: Date.now()
+      };
+      registrationCache.set(telegramId, regData);
+    }
 
     regData.data.department = department;
     regData.step = 'team';
     registrationCache.set(telegramId, regData); // Зберігаємо зміни
+    logger.debug('Department selected, moving to team selection', { telegramId, department });
 
     const keyboard = { inline_keyboard: [] };
     
     if (DEPARTMENTS[department]) {
       const teams = Object.keys(DEPARTMENTS[department]);
+      logger.debug('Found teams for department', { telegramId, department, teamsCount: teams.length });
+      
       for (const team of teams) {
         keyboard.inline_keyboard.push([
           { text: team, callback_data: `team_${team}` }
         ]);
       }
+    } else {
+      logger.warn('Department not found in DEPARTMENTS', { telegramId, department });
+      await sendMessage(chatId, `❌ Помилка: відділ "${department}" не знайдено. Спробуйте ще раз.`);
+      return;
     }
 
-    await sendMessage(chatId, `✅ Відділ: <b>${department}</b>\n\nОберіть команду:`, keyboard);
+    if (keyboard.inline_keyboard.length === 0) {
+      logger.warn('No teams found for department', { telegramId, department });
+      await sendMessage(chatId, `❌ Помилка: немає доступних команд для відділу "${department}". Зверніться до HR.`);
+      return;
+    }
+
+    await sendMessage(chatId, `✅ Відділ: <b>${department}</b>\n\n<b>Крок 2 з 7:</b> Оберіть команду:`, keyboard);
+    logger.info('Team selection menu sent', { telegramId, department });
   } catch (error) {
+    logger.error('Error in handleDepartmentSelection', error, { telegramId, department });
     console.error('❌ Помилка handleDepartmentSelection:', error);
+    console.error('❌ Stack:', error.stack);
+    try {
+      await sendMessage(chatId, '❌ Помилка обробки вибору відділу. Спробуйте ще раз.');
+    } catch (sendError) {
+      logger.error('Failed to send error message', sendError, { telegramId });
+    }
   }
 }
 
 // 👥 ВИБІР КОМАНДИ
 async function handleTeamSelection(chatId, telegramId, team) {
   try {
-    const regData = registrationCache.get(telegramId);
+    logger.info('Handling team selection', { telegramId, team });
+    
+    let regData = registrationCache.get(telegramId);
     if (!regData) {
-      console.warn(`⚠️ Немає даних реєстрації для ${telegramId}`);
+      logger.warn('No registration data found for team selection', { telegramId, team });
+      await sendMessage(chatId, '❌ Помилка: дані реєстрації не знайдені. Почніть реєстрацію спочатку через /start');
       return;
     }
 
@@ -2509,27 +2731,49 @@ async function handleTeamSelection(chatId, telegramId, team) {
       return;
     }
 
-    await sendMessage(chatId, `✅ Команда: <b>${team}</b>\n\nОберіть посаду:`, keyboard);
+    await sendMessage(chatId, `✅ Команда: <b>${team}</b>\n\n<b>Крок 3 з 7:</b> Оберіть посаду:`, keyboard);
+    logger.info('Position selection menu sent', { telegramId, team, department: regData.data.department });
   } catch (error) {
+    logger.error('Error in handleTeamSelection', error, { telegramId, team });
     console.error('❌ Помилка handleTeamSelection:', error);
     console.error('❌ Stack:', error.stack);
-    await sendMessage(chatId, '❌ Помилка обробки вибору команди. Спробуйте ще раз.');
+    try {
+      await sendMessage(chatId, '❌ Помилка обробки вибору команди. Спробуйте ще раз.');
+    } catch (sendError) {
+      logger.error('Failed to send error message', sendError, { telegramId });
+    }
   }
 }
 
 // 💼 ВИБІР ПОСАДИ
 async function handlePositionSelection(chatId, telegramId, position) {
   try {
-    const regData = registrationCache.get(telegramId);
-    if (!regData) return;
+    logger.info('Handling position selection', { telegramId, position });
+    
+    let regData = registrationCache.get(telegramId);
+    if (!regData) {
+      logger.warn('No registration data found for position selection', { telegramId, position });
+      // Якщо немає даних реєстрації, показуємо помилку та пропонуємо почати спочатку
+      await sendMessage(chatId, '❌ Помилка: дані реєстрації не знайдені. Почніть реєстрацію спочатку через /start');
+      return;
+    }
 
     regData.data.position = position;
     regData.step = 'name';
     registrationCache.set(telegramId, regData); // Зберігаємо зміни
+    logger.debug('Position selected, moving to name input', { telegramId, position });
 
-    await sendMessage(chatId, `✅ Посада: <b>${position}</b>\n\n📝 Введіть ваше ім'я:`);
+    await sendMessage(chatId, `✅ Посада: <b>${position}</b>\n\n<b>Крок 4 з 7:</b> Введіть ваше ім'я:`);
+    logger.info('Name input prompt sent', { telegramId, position });
   } catch (error) {
+    logger.error('Error in handlePositionSelection', error, { telegramId, position });
     console.error('❌ Помилка handlePositionSelection:', error);
+    console.error('❌ Stack:', error.stack);
+    try {
+      await sendMessage(chatId, '❌ Помилка обробки вибору посади. Спробуйте ще раз.');
+    } catch (sendError) {
+      logger.error('Failed to send error message', sendError, { telegramId });
+    }
   }
 }
 
@@ -2541,37 +2785,43 @@ async function handleRegistrationStep(chatId, telegramId, text) {
 
     switch (regData.step) {
       case 'name':
-        regData.data.name = text;
+        regData.data.name = text.trim();
         regData.step = 'surname';
         registrationCache.set(telegramId, regData);
-        await sendMessage(chatId, `✅ Ім'я: <b>${text}</b>\n\n📝 Введіть ваше прізвище:`);
+        logger.debug('Name entered, moving to surname', { telegramId, name: regData.data.name });
+        await sendMessage(chatId, `✅ Ім'я: <b>${text}</b>\n\n<b>Крок 5 з 7:</b> Введіть ваше прізвище:`);
         return true;
 
       case 'surname':
-        regData.data.surname = text;
+        regData.data.surname = text.trim();
         regData.step = 'birthdate';
         registrationCache.set(telegramId, regData);
-        await sendMessage(chatId, `✅ Прізвище: <b>${text}</b>\n\n📅 Введіть дату народження (ДД.ММ.РРРР):`);
+        logger.debug('Surname entered, moving to birthdate', { telegramId });
+        await sendMessage(chatId, `✅ Прізвище: <b>${text}</b>\n\n<b>Крок 6 з 7:</b> Введіть дату народження (ДД.ММ.РРРР):`);
         return true;
 
       case 'birthdate':
         if (!isValidDate(text)) {
+          logger.warn('Invalid birthdate format', { telegramId, text });
           await sendMessage(chatId, '❌ Неправильний формат дати. Використовуйте ДД.ММ.РРРР');
           return true; // Повертаємо true, щоб не показувати загальне меню
         }
-        regData.data.birthDate = text;
+        regData.data.birthDate = text.trim();
         regData.step = 'firstworkday';
         registrationCache.set(telegramId, regData);
-        await sendMessage(chatId, `✅ Дата народження: <b>${text}</b>\n\n📅 Введіть перший робочий день (ДД.ММ.РРРР):`);
+        logger.debug('Birthdate entered, moving to first work day', { telegramId });
+        await sendMessage(chatId, `✅ Дата народження: <b>${text}</b>\n\n<b>Крок 7 з 7:</b> Введіть перший робочий день (ДД.ММ.РРРР):`);
         return true;
 
       case 'firstworkday':
         if (!isValidDate(text)) {
+          logger.warn('Invalid first work day format', { telegramId, text });
           await sendMessage(chatId, '❌ Неправильний формат дати. Використовуйте ДД.ММ.РРРР');
           return true; // Повертаємо true, щоб не показувати загальне меню
         }
-        regData.data.firstWorkDay = text;
+        regData.data.firstWorkDay = text.trim();
         registrationCache.set(telegramId, regData);
+        logger.info('All registration data collected, completing registration', { telegramId });
         await completeRegistration(chatId, telegramId, regData.data);
         return true;
 
@@ -2834,7 +3084,13 @@ async function completeRegistration(chatId, telegramId, data) {
     
     // Додаємо користувача в кеш одразу після реєстрації
     userCache.set(telegramId, userData);
+    logger.info('User added to cache after registration', { telegramId, fullName });
     console.log(`✅ Користувач ${telegramId} (${fullName}) додано в кеш`);
+    
+    // Додаємо в індекс для швидкого пошуку
+    if (userIndex && typeof userIndex.add === 'function') {
+      userIndex.add(userData);
+    }
     
     // Невелика затримка для синхронізації Google Sheets
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -2842,9 +3098,11 @@ async function completeRegistration(chatId, telegramId, data) {
     // Перевіряємо, чи дані правильно збережені
     const verifyUser = await getUserInfo(telegramId);
     if (!verifyUser || !verifyUser.fullName) {
+      logger.warn('User not found immediately after registration, but continuing', { telegramId });
       console.warn(`⚠️ Попередження: користувач ${telegramId} не знайдено одразу після реєстрації, але продовжуємо...`);
       // Все одно показуємо меню, бо дані в кеші
     } else {
+      logger.info('User verified after registration', { telegramId, fullName: verifyUser.fullName });
       console.log(`✅ Підтверджено: користувач ${telegramId} (${verifyUser.fullName}) знайдено в системі`);
     }
 
@@ -2876,12 +3134,8 @@ async function showVacationMenu(chatId, telegramId) {
     // Зберігаємо попередній стан перед показом меню
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
-    // Паралельне завантаження даних для швидкості
-    // Примітка: getVacationBalance всередині викликає getUserInfo, але це все одно швидше
-    const [user, balance] = await Promise.all([
-      getUserInfo(telegramId),
-      getVacationBalance(telegramId)
-    ]);
+    const user = await getUserInfo(telegramId);
+    const balance = await getVacationBalance(telegramId, user);
     
     const text = `🏖️ <b>Відпустки</b>
 
@@ -2918,11 +3172,11 @@ async function showVacationMenu(chatId, telegramId) {
 }
 
 // 📊 БАЛАНС ВІДПУСТОК
-async function getVacationBalance(telegramId) {
+async function getVacationBalance(telegramId, existingUser = null) {
   try {
     if (!doc) return { used: 0, total: 24, available: 24 };
     
-    const user = await getUserInfo(telegramId);
+    const user = existingUser || await getUserInfo(telegramId);
     if (!user) return { used: 0, total: 24, available: 24 };
     
     // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
@@ -2987,8 +3241,8 @@ async function showVacationBalance(chatId, telegramId) {
     // Зберігаємо попередній стан (меню відпусток)
     navigationStack.pushState(telegramId, 'showVacationMenu', {});
     
-    const balance = await getVacationBalance(telegramId);
     const user = await getUserInfo(telegramId);
+    const balance = await getVacationBalance(telegramId, user);
     
     const text = `📊 <b>Детальний баланс відпусток</b>
 
@@ -3180,10 +3434,16 @@ async function showEmergencyVacationForm(chatId, telegramId) {
 📅 <b>Дата початку</b> (ДД.ММ.РРРР):`;
 
     // Збережемо стан форми
-    registrationCache.set(telegramId, {
+    const cacheData = {
       step: 'emergency_vacation_start_date',
-      data: { type: 'emergency_vacation' }
-    });
+      data: { type: 'emergency_vacation' },
+      timestamp: Date.now()
+    };
+    
+    registrationCache.set(telegramId, cacheData);
+    logger.info('Emergency vacation form cache set', { telegramId, step: cacheData.step });
+    console.log('📝 showEmergencyVacationForm: Встановлено кеш для', telegramId, 'дані:', cacheData);
+    console.log('📝 Перевірка кешу після встановлення:', registrationCache.get(telegramId));
 
     // Додаємо кнопку "Назад"
     const keyboard = addBackButton({ inline_keyboard: [] }, telegramId, 'showEmergencyVacationForm');
@@ -4228,6 +4488,9 @@ async function showApprovalsMenu(chatId, telegramId) {
 // 🏖️ ЗАТВЕРДЖЕННЯ ВІДПУСТОК
 async function showApprovalVacations(chatId, telegramId) {
   try {
+    logger.info('showApprovalVacations called', { telegramId, chatId });
+    console.log(`🔍 showApprovalVacations: telegramId=${telegramId}, chatId=${chatId}`);
+    
     navigationStack.pushState(telegramId, 'showApprovalsMenu', {});
     
     const role = await getUserRole(telegramId);
@@ -4235,6 +4498,7 @@ async function showApprovalVacations(chatId, telegramId) {
     
     // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalVacations: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
+    logger.info('showApprovalVacations user data', { telegramId, role, hasUser: !!user, position: user?.position, department: user?.department });
     
     // Перевіряємо роль, а також якщо посада або відділ містить HR - дозволяємо доступ
     const roleUpper = (role || '').toUpperCase();
@@ -4448,6 +4712,9 @@ async function showApprovalVacations(chatId, telegramId) {
 // 🏠 ЗАТВЕРДЖЕННЯ REMOTE
 async function showApprovalRemote(chatId, telegramId) {
   try {
+    logger.info('showApprovalRemote called', { telegramId, chatId });
+    console.log(`🔍 showApprovalRemote: telegramId=${telegramId}, chatId=${chatId}`);
+    
     navigationStack.pushState(telegramId, 'showApprovalsMenu', {});
     
     const role = await getUserRole(telegramId);
@@ -4455,6 +4722,7 @@ async function showApprovalRemote(chatId, telegramId) {
     
     // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalRemote: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
+    logger.info('showApprovalRemote user data', { telegramId, role, hasUser: !!user, position: user?.position, department: user?.department });
     
     // Перевіряємо роль, а також якщо посада або відділ містить HR - дозволяємо доступ
     const roleUpper = (role || '').toUpperCase();
@@ -4667,6 +4935,124 @@ async function showCEOPanel(chatId, telegramId) {
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
     console.error('❌ Помилка showCEOPanel:', error);
+  }
+}
+
+// 👥 МЕНЮ УПРАВЛІННЯ КОРИСТУВАЧАМИ (HR)
+async function showHRUsersMenu(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showHRPanel', {});
+    
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    const text = `👥 <b>Управління користувачами</b>
+
+Оберіть дію:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📋 Список всіх працівників', callback_data: 'hr_users_list' },
+          { text: '🔍 Пошук працівника', callback_data: 'hr_users_search' }
+        ],
+        [
+          { text: '➕ Додати працівника', callback_data: 'hr_users_add' },
+          { text: '✏️ Редагувати дані', callback_data: 'hr_users_edit' }
+        ],
+        [
+          { text: '👑 Управління ролями', callback_data: 'hr_users_roles' }
+        ]
+      ]
+    };
+
+    addBackButton(keyboard, telegramId, 'showHRUsersMenu');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    logger.error('Error in showHRUsersMenu', error, { telegramId });
+    await sendMessage(chatId, '❌ Помилка завантаження меню.');
+  }
+}
+
+// 📊 МЕНЮ ЗВІТІВ (HR)
+async function showHRReportsMenu(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showHRPanel', {});
+    
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    const text = `📊 <b>Звіти</b>
+
+Оберіть тип звіту:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📈 HR Дашборд', callback_data: 'hr_dashboard' },
+          { text: '📊 Аналітика', callback_data: 'analytics_hr' }
+        ],
+        [
+          { text: '🏖️ Звіт по відпустках', callback_data: 'hr_reports_vacations' },
+          { text: '🏠 Звіт по Remote', callback_data: 'hr_reports_remote' }
+        ],
+        [
+          { text: '⏰ Звіт по спізненнях', callback_data: 'hr_reports_lates' },
+          { text: '🏥 Звіт по лікарняних', callback_data: 'hr_reports_sick' }
+        ]
+      ]
+    };
+
+    addBackButton(keyboard, telegramId, 'showHRReportsMenu');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    logger.error('Error in showHRReportsMenu', error, { telegramId });
+    await sendMessage(chatId, '❌ Помилка завантаження меню.');
+  }
+}
+
+// ⚙️ МЕНЮ НАЛАШТУВАНЬ (HR)
+async function showHRSettingsMenu(chatId, telegramId) {
+  try {
+    navigationStack.pushState(telegramId, 'showHRPanel', {});
+    
+    const role = await getUserRole(telegramId);
+    if (role !== 'HR') {
+      await sendMessage(chatId, '❌ Доступ обмежено. Тільки для HR.');
+      return;
+    }
+
+    const text = `⚙️ <b>Налаштування</b>
+
+Оберіть налаштування:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔔 Налаштування сповіщень', callback_data: 'hr_settings_notifications' },
+          { text: '📅 Календар свят', callback_data: 'hr_settings_holidays' }
+        ],
+        [
+          { text: '📋 Бізнес-правила', callback_data: 'hr_settings_rules' },
+          { text: '🔗 Інтеграції', callback_data: 'hr_settings_integrations' }
+        ],
+        [
+          { text: '🔐 Безпека', callback_data: 'hr_settings_security' }
+        ]
+      ]
+    };
+
+    addBackButton(keyboard, telegramId, 'showHRSettingsMenu');
+    await sendMessage(chatId, text, keyboard);
+  } catch (error) {
+    logger.error('Error in showHRSettingsMenu', error, { telegramId });
+    await sendMessage(chatId, '❌ Помилка завантаження меню.');
   }
 }
 
@@ -5145,20 +5531,33 @@ ${message}`;
 // Початок реєстрації з callback
 async function startRegistrationFromCallback(chatId, telegramId) {
   try {
+    logger.info('Starting registration from callback', { telegramId });
+    
     // Очищаємо попередні дані реєстрації
     if (registrationCache.has(telegramId)) {
       registrationCache.delete(telegramId);
+      logger.debug('Cleared previous registration cache', { telegramId });
+    }
+    
+    // Очищаємо кеш користувача, щоб дозволити повторну реєстрацію
+    if (userCache.has(telegramId)) {
+      userCache.delete(telegramId);
+      logger.debug('Cleared user cache for re-registration', { telegramId });
     }
     
     // Отримуємо дані користувача з callback (якщо доступні)
     // Якщо ні - використовуємо null
     await startRegistration(chatId, telegramId, null, null, null);
+    logger.info('Registration started successfully', { telegramId });
   } catch (error) {
+    logger.error('Error in startRegistrationFromCallback', error, { telegramId });
     console.error('❌ Помилка startRegistrationFromCallback:', error);
+    console.error('❌ Stack:', error.stack);
     // Fallback
     try {
       await startRegistration(chatId, telegramId, null, null, null);
     } catch (fallbackError) {
+      logger.error('Fallback registration also failed', fallbackError, { telegramId });
       await sendMessage(chatId, '❌ Помилка при запуску реєстрації. Спробуйте ще раз через /start');
     }
   }
@@ -5695,9 +6094,9 @@ async function processVacationRequest(chatId, telegramId, vacationData) {
       return;
     }
     
-    // Паралельно перевіряємо баланс та отримуємо PM для швидкості
+    // Паралельно перевіряємо баланс (передаємо user, щоб не перезавантажувати) та отримуємо PM
     const [balance, pm] = await Promise.all([
-      getVacationBalance(telegramId),
+      getVacationBalance(telegramId, user),
       getPMForUser(user)
     ]);
     
@@ -7504,10 +7903,9 @@ async function processLateReport(chatId, telegramId, lateData) {
     // Перевіряємо кількість спізнень за місяць
     const lateStats = await getLateStatsForCurrentMonth(telegramId);
     
-    // Перевіряємо чи є PM
     const pm = await getPMForUser(user);
     if (pm) {
-      await notifyPMAboutLate(user, date, time, reason);
+      await notifyPMAboutLate(user, date, time, reason, pm);
     }
     await notifyHRAboutLate(user, date, time, reason, pm !== null);
     
@@ -7600,9 +7998,9 @@ async function handleLateSkipReason(chatId, telegramId) {
   }
 }
 
-async function notifyPMAboutLate(user, date, time, reason) {
+async function notifyPMAboutLate(user, date, time, reason, existingPM = null) {
   try {
-    const pm = await getPMForUser(user);
+    const pm = existingPM || await getPMForUser(user);
     if (!pm || !pm.telegramId) return;
     
     const message = `⏰ <b>Спізнення</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}\n⏰ <b>Час початку:</b> ${time}\n📝 <b>Причина:</b> ${reason}`;
@@ -7829,10 +8227,9 @@ async function processRemoteRequest(chatId, telegramId, remoteData) {
     const { date } = remoteData;
     await saveRemoteRecord(telegramId, user, date);
     
-    // Перевіряємо чи є PM
     const pm = await getPMForUser(user);
     if (pm) {
-      await notifyPMAboutRemote(user, date);
+      await notifyPMAboutRemote(user, date, pm);
     }
     await notifyHRAboutRemote(user, date, pm !== null);
     
@@ -7843,9 +8240,9 @@ async function processRemoteRequest(chatId, telegramId, remoteData) {
   }
 }
 
-async function notifyPMAboutRemote(user, date) {
+async function notifyPMAboutRemote(user, date, existingPM = null) {
   try {
-    const pm = await getPMForUser(user);
+    const pm = existingPM || await getPMForUser(user);
     if (!pm || !pm.telegramId) return;
     
     const message = `🏠 <b>Remote робота</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}`;
@@ -7986,10 +8383,9 @@ async function processSickReport(chatId, telegramId, sickData) {
     const dateObj = new Date(date);
     await saveSickRecord(telegramId, user, dateObj);
     
-    // Перевіряємо чи є PM
     const pm = await getPMForUser(user);
     if (pm) {
-      await notifyPMAboutSick(user, date);
+      await notifyPMAboutSick(user, date, pm);
     }
     await notifyHRAboutSick(user, date, pm !== null);
     
@@ -8000,9 +8396,9 @@ async function processSickReport(chatId, telegramId, sickData) {
   }
 }
 
-async function notifyPMAboutSick(user, date) {
+async function notifyPMAboutSick(user, date, existingPM = null) {
   try {
-    const pm = await getPMForUser(user);
+    const pm = existingPM || await getPMForUser(user);
     if (!pm || !pm.telegramId) return;
     
     const message = `🏥 <b>Лікарняний</b>\n\n👤 <b>Співробітник:</b> ${user.fullName}\n🏢 <b>Відділ/Команда:</b> ${user.department}/${user.team}\n📅 <b>Дата:</b> ${formatDate(date)}`;
