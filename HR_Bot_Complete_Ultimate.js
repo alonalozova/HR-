@@ -168,7 +168,7 @@ const vacationRequestsCache = new HybridCache('vacation_requests', 200, 5 * 60 *
 // 📊 МОНІТОРИНГ КЕШУ ТА ЧЕРГИ (кожні 10 хвилин)
 setInterval(() => {
   console.log(`📊 Кеш статистика: userCache=${userCache.size()}, registrationCache=${registrationCache.size()}, processedUpdates=${processedUpdates.size()}, vacationRequestsCache=${vacationRequestsCache.size()}`);
-  console.log(`🚦 Черга запитів: активні=${sheetsQueue.getRunningCount()}, в черзі=${sheetsQueue.getQueueLength()}`);
+  console.log(`🚦 Пул з'єднань: активні=${sheetsPool.getRunningCount()}, в черзі=${sheetsPool.getQueueLength()}, з'єднань=${sheetsPool.all.length}`);
 }, 10 * 60 * 1000);
 
 // 🔄 RETRY ЛОГІКА ДЛЯ GOOGLE SHEETS
@@ -258,79 +258,147 @@ async function executeWithRetryAndMonitor(fn, operationName, options = {}) {
   );
 }
 
-// 🚦 ЧЕРГА ЗАПИТІВ ДЛЯ ЗАПОБІГАННЯ RATE LIMIT
+// 🚦 ПУЛ З'ЄДНАНЬ ДО GOOGLE SHEETS
 /**
- * Черга для обмеження одночасних запитів до Google Sheets API
- * Запобігає перевищенню rate limits та покращує стабільність
+ * Пул з'єднань до Google Sheets API з чергою запитів.
+ * Кожне з'єднання — окремий GoogleSpreadsheet інстанс із власним loadInfo().
+ * Запобігає rate limit та усуває контенцію на одному doc.
  */
-class RequestQueue {
-  constructor(maxConcurrent = 3, delayBetweenRequests = 100) {
+class GoogleSheetsPool {
+  constructor(poolSize = 3, delayBetweenRequests = 100) {
+    this.poolSize = poolSize;
+    this.delayBetweenRequests = delayBetweenRequests;
+    this.available = [];
+    this.all = [];
     this.queue = [];
     this.running = 0;
-    this.maxConcurrent = maxConcurrent;
-    this.delayBetweenRequests = delayBetweenRequests;
+    this.initialized = false;
+    this._primaryDoc = null;
+  }
+
+  get isReady() {
+    return this.initialized && this.all.length > 0;
   }
 
   /**
-   * Додає функцію до черги
-   * @param {Function} fn - Асинхронна функція для виконання
-   * @returns {Promise<any>} Результат виконання функції
+   * Первинне з'єднання (для backward compat — де код перевіряє `doc`)
    */
-  async add(fn) {
+  get doc() {
+    return this._primaryDoc;
+  }
+
+  async initialize() {
+    if (!SPREADSHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+      console.warn('⚠️ Google Sheets credentials не встановлено');
+      return false;
+    }
+
+    const created = [];
+    for (let i = 0; i < this.poolSize; i++) {
+      try {
+        const conn = await this._createConnection();
+        created.push(conn);
+        console.log(`✅ Google Sheets з'єднання #${i + 1} створено: ${conn.title}`);
+      } catch (error) {
+        console.warn(`⚠️ Не вдалося створити з'єднання #${i + 1}: ${error.message}`);
+        if (i === 0) throw error;
+      }
+    }
+
+    this.all = created;
+    this.available = [...created];
+    this._primaryDoc = created[0] || null;
+    this.initialized = created.length > 0;
+
+    console.log(`✅ Google Sheets пул: ${created.length}/${this.poolSize} з'єднань`);
+    return this.initialized;
+  }
+
+  async _createConnection() {
+    const { JWT } = require('google-auth-library');
+    const { GoogleSpreadsheet } = require('google-spreadsheet');
+
+    const auth = new JWT({
+      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    const conn = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
+    await conn.loadInfo();
+    return conn;
+  }
+
+  async _reconnect(index) {
+    try {
+      const conn = await this._createConnection();
+      this.all[index] = conn;
+      console.log(`🔄 Google Sheets з'єднання #${index + 1} перепідключено`);
+      return conn;
+    } catch (error) {
+      console.error(`❌ Помилка перепідключення #${index + 1}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Виконує функцію з пулу з'єднань. Callback отримує doc як параметр.
+   * @param {function(GoogleSpreadsheet): Promise<any>} fn
+   * @returns {Promise<any>}
+   */
+  async execute(fn) {
     return new Promise((resolve, reject) => {
       this.queue.push({ fn, resolve, reject });
-      this.process();
+      this._process();
     });
   }
 
-  /**
-   * Обробляє чергу запитів
-   * @private
-   */
-  async process() {
-    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+  /** @deprecated Використовуйте execute(). Залишено для backward compat. */
+  async add(fn) {
+    return this.execute(async (poolDoc) => fn(poolDoc));
+  }
+
+  async _process() {
+    if (this.running >= this.available.length + this.all.length || this.queue.length === 0) {
       return;
     }
-    
+    if (this.available.length === 0) return;
+
     this.running++;
+    const conn = this.available.pop();
     const { fn, resolve, reject } = this.queue.shift();
-    
+
     try {
-      const result = await fn();
+      await conn.loadInfo();
+      const result = await fn(conn);
       resolve(result);
+      this.available.push(conn);
     } catch (error) {
+      if (error.message?.includes('rate limit') || error.message?.includes('quota') ||
+          error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+        const idx = this.all.indexOf(conn);
+        const newConn = await this._reconnect(idx);
+        this.available.push(newConn || conn);
+      } else {
+        this.available.push(conn);
+      }
       reject(error);
     } finally {
       this.running--;
-      
-      // Затримка перед наступним запитом
       if (this.queue.length > 0) {
         await new Promise(r => setTimeout(r, this.delayBetweenRequests));
       }
-      
-      this.process();
+      this._process();
     }
   }
 
-  /**
-   * Отримує поточну кількість активних запитів
-   * @returns {number}
-   */
-  getRunningCount() {
-    return this.running;
-  }
-
-  /**
-   * Отримує кількість запитів в черзі
-   * @returns {number}
-   */
-  getQueueLength() {
-    return this.queue.length;
-  }
+  getRunningCount() { return this.running; }
+  getQueueLength() { return this.queue.length; }
 }
 
-// Створюємо глобальну чергу для Google Sheets операцій
-const sheetsQueue = new RequestQueue(3, 100); // Максимум 3 одночасні запити, затримка 100мс
+const sheetsPool = new GoogleSheetsPool(3, 100);
+// Backward compat: sheetsQueue.add() все ще працює
+const sheetsQueue = sheetsPool;
 
 // 🎯 ІНІЦІАЛІЗАЦІЯ SERVICES ТА HANDLERS (буде викликана після initGoogleSheets)
 let notificationService;
@@ -684,28 +752,21 @@ async function initSheets() {
   }
 }
 
-// 📊 ІНІЦІАЛІЗАЦІЯ GOOGLE SHEETS
+// 📊 ІНІЦІАЛІЗАЦІЯ GOOGLE SHEETS (через пул з'єднань)
 async function initGoogleSheets() {
   try {
-    if (!SPREADSHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
-      console.warn('⚠️ Google Sheets credentials не встановлено');
+    await sheetsPool.initialize();
+    doc = sheetsPool.doc;
+    
+    if (!doc) {
+      console.warn('⚠️ Google Sheets пул не ініціалізовано');
       return false;
     }
     
-    const serviceAccountAuth = new JWT({
-      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-    
-    doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
-    await doc.loadInfo();
     console.log('✅ Google Sheets підключено:', doc.title);
     
-    // Ініціалізуємо всі необхідні вкладки з українськими назвами
     await initSheets();
     
-    // Ініціалізуємо всі модулі після підключення Google Sheets
     try {
       if (typeof initializeModules === 'function') {
         initializeModules();
@@ -716,7 +777,6 @@ async function initGoogleSheets() {
     } catch (moduleError) {
       console.error('❌ Помилка ініціалізації модулів:', moduleError);
       console.error('❌ Stack:', moduleError.stack);
-      // Продовжуємо роботу без модулів (fallback на старі функції)
     }
     
     return true;
@@ -1648,10 +1708,8 @@ async function getUserInfo(telegramId) {
     }
     
     // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
-    const result = await sheetsQueue.add(async () => {
-    await doc.loadInfo();
-      // Спробуємо спочатку українську назву, потім англійську для сумісності
-      const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+    const result = await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Працівники'] || poolDoc.sheetsByTitle['Employees'];
       if (!sheet) {
         console.warn(`⚠️ Лист Працівники/Employees не знайдено для користувача ${telegramId}`);
         return null;
@@ -1762,9 +1820,8 @@ async function getUsersInfoBatch(telegramIds = []) {
     }
 
     // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
-    await sheetsQueue.add(async () => {
-      await doc.loadInfo();
-      const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+    await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Працівники'] || poolDoc.sheetsByTitle['Employees'];
       if (!sheet) {
         console.warn('⚠️ Таблиця Працівники/Employees не знайдена для batch-завантаження');
         return;
@@ -3182,10 +3239,8 @@ async function getVacationBalance(telegramId, existingUser = null) {
     if (!user) return { used: 0, total: 24, available: 24 };
     
     // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
-    return await sheetsQueue.add(async () => {
-    await doc.loadInfo();
-      // Спробуємо спочатку українську назву, потім англійську для сумісності
-      let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+    return await sheetsPool.execute(async (poolDoc) => {
+      let sheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
       if (!sheet) return { used: 0, total: 24, available: 24, annual: 24, remaining: 24 };
     
     const rows = await sheet.getRows();
@@ -3279,9 +3334,8 @@ async function showMyVacationRequests(chatId, telegramId, page = 0) {
     const PAGE_SIZE = 5;
     
     // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
-    await sheetsQueue.add(async () => {
-    await doc.loadInfo();
-      const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+    await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
     if (!sheet) {
       await sendMessage(chatId, '📋 У вас поки немає заявок на відпустку.');
       return;
@@ -6209,9 +6263,8 @@ async function checkVacationConflicts(department, team, startDate, endDate, excl
     if (!doc) return [];
     
     // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
-    return await sheetsQueue.add(async () => {
-    await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Vacations'];
+    return await sheetsPool.execute(async (poolDoc) => {
+    let sheet = poolDoc.sheetsByTitle['Vacations'];
     if (!sheet) return [];
     
     const rows = await sheet.getRows();
@@ -6274,13 +6327,11 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
       }
       
       // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
-      return await sheetsQueue.add(async () => {
-      await doc.loadInfo();
-        // Спробуємо спочатку українську назву, потім англійську для сумісності
-        let sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+      return await sheetsPool.execute(async (poolDoc) => {
+        let sheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
       if (!sheet) {
         console.log(`📋 Створюємо новий лист "Відпустки"...`);
-        sheet = await doc.addSheet({
+        sheet = await poolDoc.addSheet({
             title: 'Відпустки',
           headerValues: [
               'ID заявки', 'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'PM',
@@ -6364,11 +6415,9 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
         }
       }
       
-      // Оновлюємо інформацію про лист для синхронізації
-      await doc.loadInfo();
+      await poolDoc.loadInfo();
       await sheet.loadCells();
       
-      // Перевіряємо, що рядок дійсно доступний
       const verifyId = savedRow.get('ID заявки') || savedRow.get('RequestID');
       console.log(`🔍 Після оновлення: ID в рядку="${verifyId}", співпадає=${verifyId === requestId}`);
       
@@ -6386,7 +6435,6 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
         status: rowData['Статус']
       });
       
-      // Зберігаємо заявку в тимчасовий кеш для швидкого пошуку
       vacationRequestsCache.set(requestId, {
         requestId,
         telegramId,
@@ -6396,14 +6444,12 @@ async function saveVacationRequest(telegramId, user, startDate, endDate, days, s
       });
       console.log(`💾 Заявка ${requestId} збережена в тимчасовий кеш`);
       
-      // Очікуємо, поки заявка з'явиться в таблиці (до 5 секунд)
       let foundInVerification = false;
       for (let i = 0; i < 5; i++) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         
-        // Оновлюємо інформацію про лист перед перевіркою
-        await doc.loadInfo();
-        const verificationSheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+        await poolDoc.loadInfo();
+        const verificationSheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
         if (verificationSheet) {
           const verificationRow = await findVacationRowById(verificationSheet, requestId);
           if (verificationRow.row) {
@@ -6792,12 +6838,8 @@ async function handleHRVacationApproval(chatId, telegramId, requestId, approved)
         }
         
         // Обгортаємо операції з Google Sheets в чергу для запобігання rate limit
-        requestRowData = await sheetsQueue.add(async () => {
-          // Оновлюємо інформацію про документ та лист для синхронізації
-          await doc.loadInfo();
-          
-          // Спробуємо спочатку українську назву, потім англійську для сумісності
-          const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
+        requestRowData = await sheetsPool.execute(async (poolDoc) => {
+          const sheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
           if (!sheet) {
             return { sheet: null, row: null, sampleIds: [] };
           }
@@ -7362,9 +7404,8 @@ async function showHRExportEmployeeList(chatId, telegramId) {
     }
     
     // Обгортаємо в чергу для запобігання rate limit
-    await sheetsQueue.add(async () => {
-    await doc.loadInfo();
-      const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+    await sheetsPool.execute(async (poolDoc) => {
+      const employeesSheet = poolDoc.sheetsByTitle['Працівники'] || poolDoc.sheetsByTitle['Employees'];
     if (!employeesSheet) {
       await sendMessage(chatId, '❌ Таблиця працівників не знайдена.');
       return;
@@ -8754,9 +8795,8 @@ async function loadUsersIntoIndex() {
     }
     
     // Обгортаємо в чергу для запобігання rate limit
-    await sheetsQueue.add(async () => {
-      await doc.loadInfo();
-      const sheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
+    await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Працівники'] || poolDoc.sheetsByTitle['Employees'];
       if (!sheet) {
         console.warn('⚠️ Таблиця Працівники/Employees не знайдена для завантаження індексу');
         return;
