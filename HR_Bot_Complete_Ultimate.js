@@ -1252,6 +1252,7 @@ async function processCallback(callbackQuery) {
     
     // Маршрутизація callback'ів
     const routes = {
+      'vacation_menu': () => showVacationMenu(chatId, telegramId),
       'vacation_apply': () => vacationHandler ? vacationHandler.showVacationForm(chatId, telegramId) : showVacationForm(chatId, telegramId),
       'vacation_balance': () => vacationHandler ? vacationHandler.showVacationBalance(chatId, telegramId) : showVacationBalance(chatId, telegramId),
       'vacation_requests': () => vacationHandler ? vacationHandler.showMyVacationRequests(chatId, telegramId) : showMyVacationRequests(chatId, telegramId),
@@ -3185,22 +3186,15 @@ async function completeRegistration(chatId, telegramId, data) {
 // 🏖️ МЕНЮ ВІДПУСТОК
 async function showVacationMenu(chatId, telegramId) {
   try {
-    // Зберігаємо попередній стан перед показом меню
     navigationStack.pushState(telegramId, 'showMainMenu', {});
-    
-    const user = await getUserInfo(telegramId);
-    const balance = await getVacationBalance(telegramId, user);
     
     const text = `🏖️ <b>Відпустки</b>
 
-💰 <b>Ваш баланс:</b> ${balance.used}/${balance.total} днів
-📅 <b>Доступно:</b> ${balance.available} днів
-
-<b>Правила відпусток:</b>
+<b>Правила:</b>
 • Мін: 1 день, Макс: 7 днів за раз
-• Відпустка доступна після 3-х місяців від початку роботи
+• Доступно після 3-х місяців роботи
 • Накладки заборонені в команді
-• Процес: Ви → PM → HR (якщо немає PM, то одразу → HR)
+• Процес: Ви → PM → HR
 
 Оберіть дію:`;
 
@@ -3211,13 +3205,12 @@ async function showVacationMenu(chatId, telegramId) {
           { text: '🚨 Екстрена відпустка', callback_data: 'vacation_emergency' }
         ],
         [
-          { text: '📄 Мої заявки', callback_data: 'vacation_requests' },
-          { text: '📊 Баланс деталі', callback_data: 'vacation_balance' }
+          { text: '📊 Мій баланс', callback_data: 'vacation_balance' },
+          { text: '📄 Мої заявки', callback_data: 'vacation_requests' }
         ]
       ]
     };
 
-    // Додаємо кнопку "Назад"
     addBackButton(keyboard, telegramId, 'showVacationMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
@@ -3287,31 +3280,47 @@ async function getVacationBalance(telegramId, existingUser = null) {
   }
 }
 
-// 📊 ПОКАЗАТИ БАЛАНС ВІДПУСТОК
+// 📊 ПОКАЗАТИ БАЛАНС ВІДПУСТОК (прогресивне завантаження)
 async function showVacationBalance(chatId, telegramId) {
+  let msgId = null;
   try {
-    // Зберігаємо попередній стан (меню відпусток)
     navigationStack.pushState(telegramId, 'showVacationMenu', {});
+    
+    const sent = await bot.sendMessage(chatId, '⏳ Завантажую баланс...', { parse_mode: 'HTML' });
+    msgId = sent.message_id;
     
     const user = await getUserInfo(telegramId);
     const balance = await getVacationBalance(telegramId, user);
     
-    const text = `📊 <b>Детальний баланс відпусток</b>
-
-💰 <b>Використано:</b> ${balance.used} днів
-📅 <b>Доступно:</b> ${balance.available} днів
-📊 <b>Загальний ліміт:</b> ${balance.total} днів
-
-${user?.firstWorkDay ? `📆 <b>Перший робочий день:</b> ${formatDate(new Date(user.firstWorkDay))}` : ''}
-${user?.firstWorkDay ? `⏰ <b>Можна брати відпустку після:</b> ${formatDate(new Date(new Date(user.firstWorkDay).setMonth(new Date(user.firstWorkDay).getMonth() + 3)))}` : ''}`;
+    let text = `📊 <b>Детальний баланс відпусток</b>\n\n`;
+    text += `💰 <b>Використано:</b> ${balance.used} днів\n`;
+    text += `📅 <b>Доступно:</b> ${balance.available} днів\n`;
+    text += `📊 <b>Загальний ліміт:</b> ${balance.total} днів\n`;
     
-    const keyboard = { inline_keyboard: [] };
-    // Додаємо кнопку "Назад"
-    addBackButton(keyboard, telegramId, 'showVacationBalance');
-    await sendMessage(chatId, text, keyboard);
+    if (user?.firstWorkDay) {
+      text += `\n📆 <b>Перший робочий день:</b> ${formatDate(new Date(user.firstWorkDay))}`;
+      const afterProbation = new Date(user.firstWorkDay);
+      afterProbation.setMonth(afterProbation.getMonth() + 3);
+      text += `\n⏰ <b>Можна брати відпустку після:</b> ${formatDate(afterProbation)}`;
+    }
+    
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '📝 Подати заявку', callback_data: 'vacation_apply' }],
+        [{ text: '⬅️ Назад до відпусток', callback_data: 'vacation_menu' }]
+      ]
+    };
+    
+    await bot.editMessageText(text, {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: keyboard
+    });
   } catch (error) {
     console.error('❌ Помилка showVacationBalance:', error);
-    await sendMessage(chatId, '❌ Помилка завантаження балансу.');
+    if (msgId) {
+      await bot.editMessageText('❌ Помилка завантаження балансу.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    } else {
+      await sendMessage(chatId, '❌ Помилка завантаження балансу.');
+    }
   }
 }
 
@@ -3507,25 +3516,12 @@ async function showEmergencyVacationForm(chatId, telegramId) {
 // 🏠 МЕНЮ REMOTE
 async function showRemoteMenu(chatId, telegramId) {
   try {
-    // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
-    
-    const user = await getUserInfo(telegramId);
-    if (!user) {
-      console.error(`❌ Користувач ${telegramId} не знайдений в showRemoteMenu`);
-      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію через /start');
-      return;
-    }
-    
-    const stats = await getRemoteStats(telegramId);
     
     const text = `🏠 <b>Remote робота</b>
 
-📊 <b>Статистика за поточний місяць:</b>
-• Використано днів: ${stats.used}
-
 <b>Правила:</b>
-• Повідомляти до 19:00 дня передуючого залишенню вдома
+• Повідомляти до 19:00 попереднього дня
 • Автоматичне затвердження
 
 Оберіть дію:`;
@@ -3542,7 +3538,6 @@ async function showRemoteMenu(chatId, telegramId) {
       ]
     };
 
-    // Додаємо кнопку "Назад"
     addBackButton(keyboard, telegramId, 'showRemoteMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
@@ -3553,28 +3548,14 @@ async function showRemoteMenu(chatId, telegramId) {
 // ⏰ МЕНЮ СПІЗНЕНЬ
 async function showLateMenu(chatId, telegramId) {
   try {
-    // Перевіряємо, чи користувач існує
-    const user = await getUserInfo(telegramId);
-    if (!user) {
-      await sendMessage(chatId, '❌ Користувач не знайдений. Пройдіть реєстрацію через /start');
-      return;
-    }
-    
-    // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
-    const stats = await getLateStats(telegramId);
-    
     const text = `⏰ <b>Спізнення</b>
-
-📊 <b>Статистика за поточний місяць:</b>
-• Спізнень: ${stats.count}/7 (ліміт)
-• Попередження: ${stats.warnings}
 
 <b>Правила:</b>
 • Спізнення рахується з 11:01
 • 7 спізнень/місяць = попередження
-• Повідомляти PM і HR (якщо немає PM - одразу HR)
+• Повідомляти PM і HR
 
 Оберіть дію:`;
 
@@ -3589,7 +3570,6 @@ async function showLateMenu(chatId, telegramId) {
       ]
     };
 
-    // Додаємо кнопку "Назад"
     addBackButton(keyboard, telegramId, 'showLateMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
@@ -3600,16 +3580,9 @@ async function showLateMenu(chatId, telegramId) {
 // 🏥 МЕНЮ ЛІКАРНЯНИХ
 async function showSickMenu(chatId, telegramId) {
   try {
-    // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
-    const stats = await getSickStats(telegramId);
-    
     const text = `🏥 <b>Лікарняний</b>
-
-📊 <b>Статистика за місяць:</b>
-• Лікарняних днів: ${stats.days}
-• Записів: ${stats.count}
 
 <b>Правила:</b>
 • Без лімітів
@@ -3629,7 +3602,6 @@ async function showSickMenu(chatId, telegramId) {
       ]
     };
 
-    // Додаємо кнопку "Назад"
     addBackButton(keyboard, telegramId, 'showSickMenu');
     await sendMessage(chatId, text, keyboard);
   } catch (error) {
