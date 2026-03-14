@@ -6,6 +6,11 @@ const logger = {
   info: (message, context = {}) => {
     console.log(`ℹ️ ${new Date().toISOString()} - ${message}`, context);
   },
+  debug: (message, context = {}) => {
+    if (process.env.LOG_LEVEL === 'debug') {
+      console.log(`🔍 ${new Date().toISOString()} - ${message}`, context);
+    }
+  },
   warn: (message, context = {}) => {
     console.warn(`⚠️ ${new Date().toISOString()} - ${message}`, context);
   },

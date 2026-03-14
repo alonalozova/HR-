@@ -975,15 +975,12 @@ async function processMessage(message) {
   const telegramId = message?.from?.id;
   
   try {
-    // Перевірка наявності обов'язкових полів
-    if (!message || !message.chat || !message.from) {
-      console.error('❌ Невалідне повідомлення:', JSON.stringify(message));
+    if (!chatId || !telegramId) {
+      console.error('❌ Невалідне повідомлення: відсутній chatId або telegramId');
       return;
     }
     
-    const chatId = message.chat.id;
     const text = message.text || '';
-    const telegramId = message.from.id;
     const username = message.from.username;
     const firstName = message.from.first_name;
     const lastName = message.from.last_name;
@@ -1228,8 +1225,10 @@ async function processCallback(callbackQuery) {
   const telegramId = callbackQuery?.from?.id;
   
   try {
-    const chatId = callbackQuery.message.chat.id;
-    const telegramId = callbackQuery.from.id;
+    if (!chatId || !telegramId) {
+      logger.warn('Invalid callback query - missing chatId or telegramId', { chatId, telegramId });
+      return;
+    }
     const data = callbackQuery.data;
     
     // Rate limiting для callback'ів
@@ -1936,8 +1935,7 @@ async function getUsersInfoBatch(telegramIds = []) {
  */
 async function getUserRole(telegramId) {
   try {
-    if (!doc) {
-      // Якщо Google Sheets не підключено, спробуємо визначити роль за посадою та відділом з кешу
+    if (!sheetsPool.isReady) {
       const user = userCache.get(telegramId);
       if (user) {
         return determineRoleByPositionAndDepartment(user.position, user.department);
@@ -1945,30 +1943,32 @@ async function getUserRole(telegramId) {
       return 'EMP';
     }
     
-    await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Roles'];
+    const role = await sheetsPool.execute(async (poolDoc) => {
+      let sheet = poolDoc.sheetsByTitle['Roles'];
+      
+      if (!sheet) {
+        sheet = await poolDoc.addSheet({
+          title: 'Roles',
+          headerValues: ['TelegramID', 'Role', 'Position', 'Department', 'UpdatedAt']
+        });
+        console.log('✅ Створено таблицю Roles');
+      }
+      
+      const rows = await sheet.getRows();
+      const roleRow = rows.find(row => row.get('TelegramID') == telegramId);
+      
+      if (roleRow) {
+        return roleRow.get('Role') || 'EMP';
+      }
+      
+      return null;
+    });
     
-    // Якщо таблиця Roles не існує, створюємо її
-    if (!sheet) {
-      sheet = await doc.addSheet({
-        title: 'Roles',
-        headerValues: ['TelegramID', 'Role', 'Position', 'Department', 'UpdatedAt']
-      });
-      console.log('✅ Створено таблицю Roles');
-    }
+    if (role) return role;
     
-    const rows = await sheet.getRows();
-    const roleRow = rows.find(row => row.get('TelegramID') == telegramId);
-    
-    if (roleRow) {
-      return roleRow.get('Role') || 'EMP';
-    }
-    
-    // Якщо ролі немає в таблиці, спробуємо визначити за посадою та відділом
     const user = await getUserInfo(telegramId);
     if (user) {
       const determinedRole = determineRoleByPositionAndDepartment(user.position, user.department);
-      // Зберігаємо визначену роль в таблицю
       await saveUserRole(telegramId, determinedRole, user.position, user.department);
       return determinedRole;
     }
@@ -2054,40 +2054,39 @@ function determineRoleByPositionAndDepartment(position, department) {
 // 💾 ЗБЕРЕЖЕННЯ РОЛІ КОРИСТУВАЧА
 async function saveUserRole(telegramId, role, position, department) {
   try {
-    if (!doc) return;
+    if (!sheetsPool.isReady) return;
     
-    await doc.loadInfo();
-    let sheet = doc.sheetsByTitle['Roles'];
-    
-    if (!sheet) {
-      sheet = await doc.addSheet({
-        title: 'Roles',
-        headerValues: ['TelegramID', 'Role', 'Position', 'Department', 'UpdatedAt']
-      });
-    }
-    
-    const rows = await sheet.getRows();
-    const existingRow = rows.find(row => row.get('TelegramID') == telegramId);
-    
-    if (existingRow) {
-      // Оновлюємо існуючу роль
-      existingRow.set('Role', role);
-      existingRow.set('Position', position || '');
-      existingRow.set('Department', department || '');
-      existingRow.set('UpdatedAt', new Date().toISOString());
-      await existingRow.save();
-      console.log(`✅ Оновлено роль для ${telegramId}: ${role}`);
-    } else {
-      // Додаємо нову роль
-      await sheet.addRow({
-        TelegramID: telegramId,
-        Role: role,
-        Position: position || '',
-        Department: department || '',
-        UpdatedAt: new Date().toISOString()
-      });
-      console.log(`✅ Додано роль для ${telegramId}: ${role}`);
-    }
+    await sheetsPool.execute(async (poolDoc) => {
+      let sheet = poolDoc.sheetsByTitle['Roles'];
+      
+      if (!sheet) {
+        sheet = await poolDoc.addSheet({
+          title: 'Roles',
+          headerValues: ['TelegramID', 'Role', 'Position', 'Department', 'UpdatedAt']
+        });
+      }
+      
+      const rows = await sheet.getRows();
+      const existingRow = rows.find(row => row.get('TelegramID') == telegramId);
+      
+      if (existingRow) {
+        existingRow.set('Role', role);
+        existingRow.set('Position', position || '');
+        existingRow.set('Department', department || '');
+        existingRow.set('UpdatedAt', new Date().toISOString());
+        await existingRow.save();
+        console.log(`✅ Оновлено роль для ${telegramId}: ${role}`);
+      } else {
+        await sheet.addRow({
+          TelegramID: telegramId,
+          Role: role,
+          Position: position || '',
+          Department: department || '',
+          UpdatedAt: new Date().toISOString()
+        });
+        console.log(`✅ Додано роль для ${telegramId}: ${role}`);
+      }
+    });
   } catch (error) {
     console.error('❌ Помилка saveUserRole:', error);
   }
@@ -3021,112 +3020,108 @@ async function completeRegistration(chatId, telegramId, data) {
       pm: null
     };
     
-    // Збереження в Google Sheets
-    if (doc) {
-      await doc.loadInfo();
-      
-      // 1. Зберігаємо в "Працівники"
-      let employeesSheet = doc.sheetsByTitle['Працівники'];
-      if (!employeesSheet) {
-        employeesSheet = await doc.addSheet({
-          title: 'Працівники',
-          headerValues: [
-            'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
-            'Дата народження', 'Перший робочий день', 'Режим роботи', 'Дата реєстрації'
-          ]
-        });
-      }
-      
-      // Перевіряємо, чи користувач вже існує
-      const existingRows = await employeesSheet.getRows();
-      const existingUser = existingRows.find(row => row.get('TelegramID') == telegramId);
-      
-      if (existingUser) {
-        // Оновлюємо існуючого користувача
-        existingUser.set('Ім\'я та прізвище', fullName);
-        existingUser.set('Відділ', data.department);
-        existingUser.set('Команда', data.team);
-        existingUser.set('Посада', data.position);
-        existingUser.set('Дата народження', data.birthDate);
-        existingUser.set('Перший робочий день', data.firstWorkDay);
-        existingUser.set('Режим роботи', 'Hybrid');
-        existingUser.set('Дата реєстрації', new Date().toISOString());
-        await existingUser.save();
-        console.log(`✅ Оновлено користувача ${telegramId} (${fullName}) в Google Sheets`);
-      } else {
-        // Додаємо нового користувача
-        await employeesSheet.addRow({
-          'TelegramID': telegramId,
-          'Ім\'я та прізвище': fullName,
-          'Відділ': data.department,
-          'Команда': data.team,
-          'Посада': data.position,
-          'Дата народження': data.birthDate,
-          'Перший робочий день': data.firstWorkDay,
-          'Режим роботи': 'Hybrid',
-          'Дата реєстрації': new Date().toISOString()
-        });
-        console.log(`✅ Додано користувача ${telegramId} (${fullName}) в Google Sheets`);
-      }
-      
-      // 3. Визначаємо та зберігаємо роль на основі посади та відділу
-      const determinedRole = determineRoleByPositionAndDepartment(data.position, data.department);
-      await saveUserRole(telegramId, determinedRole, data.position, data.department);
-      console.log(`✅ Визначено роль для ${telegramId}: ${determinedRole} (на основі посади: ${data.position}, відділ: ${data.department})`);
-      
-      // 2. Зберігаємо в "Дати початку роботи" та прив'язуємо існуючі записи
-      let workStartSheet = doc.sheetsByTitle['Дати початку роботи'];
-      if (!workStartSheet) {
-        workStartSheet = await doc.addSheet({
-          title: 'Дати початку роботи',
-          headerValues: [
-            'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
-            'Перший робочий день', 'Дата додавання'
-          ]
-        });
-      }
-      
-      // Шукаємо існуючі записи за ім'ям та датою (без TelegramID)
-      const workStartRows = await workStartSheet.getRows();
-      const existingWorkStartByName = workStartRows.find(row => {
-        const rowName = (row.get('Ім\'я та прізвище') || row.get('FullName') || '').trim();
-        const rowDate = row.get('Перший робочий день') || row.get('FirstWorkDay') || '';
-        const rowTelegramID = row.get('TelegramID');
-        // Знаходимо запис з відповідним ім'ям та датою, але без TelegramID або з порожнім
-        return rowName === fullName.trim() && 
-               rowDate === data.firstWorkDay && 
-               (!rowTelegramID || rowTelegramID === '' || rowTelegramID === 'TEMP');
-      });
-      
-      if (existingWorkStartByName) {
-        // Оновлюємо існуючий запис: додаємо TelegramID та інші дані
-        existingWorkStartByName.set('TelegramID', telegramId);
-        existingWorkStartByName.set('Ім\'я та прізвище', fullName);
-        existingWorkStartByName.set('Відділ', data.department);
-        existingWorkStartByName.set('Команда', data.team);
-        existingWorkStartByName.set('Посада', data.position);
-        await existingWorkStartByName.save();
-        console.log(`✅ Прив'язано існуючий запис дати початку роботи для ${telegramId} (${fullName})`);
-      } else {
-        // Перевіряємо, чи запис вже існує з цим TelegramID
-        const existingWorkStart = workStartRows.find(row => 
-          row.get('TelegramID') == telegramId && row.get('Перший робочий день') == data.firstWorkDay
-        );
+    // Збереження в Google Sheets через пул з'єднань
+    if (sheetsPool.isReady) {
+      await sheetsPool.execute(async (poolDoc) => {
+        // 1. Зберігаємо в "Працівники"
+        let employeesSheet = poolDoc.sheetsByTitle['Працівники'];
+        if (!employeesSheet) {
+          employeesSheet = await poolDoc.addSheet({
+            title: 'Працівники',
+            headerValues: [
+              'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
+              'Дата народження', 'Перший робочий день', 'Режим роботи', 'Дата реєстрації'
+            ]
+          });
+        }
         
-        if (!existingWorkStart) {
-          // Додаємо новий запис
-          await workStartSheet.addRow({
+        const existingRows = await employeesSheet.getRows();
+        const existingUser = existingRows.find(row => row.get('TelegramID') == telegramId);
+        
+        if (existingUser) {
+          existingUser.set('Ім\'я та прізвище', fullName);
+          existingUser.set('Відділ', data.department);
+          existingUser.set('Команда', data.team);
+          existingUser.set('Посада', data.position);
+          existingUser.set('Дата народження', data.birthDate);
+          existingUser.set('Перший робочий день', data.firstWorkDay);
+          existingUser.set('Режим роботи', 'Hybrid');
+          existingUser.set('Дата реєстрації', new Date().toISOString());
+          await existingUser.save();
+          console.log(`✅ Оновлено користувача ${telegramId} (${fullName}) в Google Sheets`);
+        } else {
+          await employeesSheet.addRow({
             'TelegramID': telegramId,
             'Ім\'я та прізвище': fullName,
             'Відділ': data.department,
             'Команда': data.team,
             'Посада': data.position,
+            'Дата народження': data.birthDate,
             'Перший робочий день': data.firstWorkDay,
-            'Дата додавання': new Date().toISOString()
+            'Режим роботи': 'Hybrid',
+            'Дата реєстрації': new Date().toISOString()
           });
-          console.log(`✅ Додано дату початку роботи для ${telegramId} (${fullName})`);
+          console.log(`✅ Додано користувача ${telegramId} (${fullName}) в Google Sheets`);
         }
-      }
+      });
+
+      // 2. Визначаємо та зберігаємо роль
+      const determinedRole = determineRoleByPositionAndDepartment(data.position, data.department);
+      await saveUserRole(telegramId, determinedRole, data.position, data.department);
+      console.log(`✅ Визначено роль для ${telegramId}: ${determinedRole}`);
+      
+      // 3. Зберігаємо в "Дати початку роботи"
+      await sheetsPool.execute(async (poolDoc) => {
+        let workStartSheet = poolDoc.sheetsByTitle['Дати початку роботи'];
+        if (!workStartSheet) {
+          workStartSheet = await poolDoc.addSheet({
+            title: 'Дати початку роботи',
+            headerValues: [
+              'TelegramID', 'Ім\'я та прізвище', 'Відділ', 'Команда', 'Посада', 
+              'Перший робочий день', 'Дата додавання'
+            ]
+          });
+        }
+        
+        const workStartRows = await workStartSheet.getRows();
+        const existingWorkStartByName = workStartRows.find(row => {
+          const rowName = (row.get('Ім\'я та прізвище') || row.get('FullName') || '').trim();
+          const rowDate = row.get('Перший робочий день') || row.get('FirstWorkDay') || '';
+          const rowTelegramID = row.get('TelegramID');
+          return rowName === fullName.trim() && 
+                 rowDate === data.firstWorkDay && 
+                 (!rowTelegramID || rowTelegramID === '' || rowTelegramID === 'TEMP');
+        });
+        
+        if (existingWorkStartByName) {
+          existingWorkStartByName.set('TelegramID', telegramId);
+          existingWorkStartByName.set('Ім\'я та прізвище', fullName);
+          existingWorkStartByName.set('Відділ', data.department);
+          existingWorkStartByName.set('Команда', data.team);
+          existingWorkStartByName.set('Посада', data.position);
+          await existingWorkStartByName.save();
+          console.log(`✅ Прив'язано запис дати початку роботи для ${telegramId}`);
+        } else {
+          const existingWorkStart = workStartRows.find(row => 
+            row.get('TelegramID') == telegramId && row.get('Перший робочий день') == data.firstWorkDay
+          );
+          
+          if (!existingWorkStart) {
+            await workStartSheet.addRow({
+              'TelegramID': telegramId,
+              'Ім\'я та прізвище': fullName,
+              'Відділ': data.department,
+              'Команда': data.team,
+              'Посада': data.position,
+              'Перший робочий день': data.firstWorkDay,
+              'Дата додавання': new Date().toISOString()
+            });
+            console.log(`✅ Додано дату початку роботи для ${telegramId}`);
+          }
+        }
+      });
+    } else {
+      logger.warn('Google Sheets не готовий при реєстрації, дані збережені лише в кеші', { telegramId });
     }
 
     // Очищаємо кеш реєстрації
