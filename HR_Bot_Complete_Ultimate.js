@@ -2132,19 +2132,18 @@ async function getPMForUser(user) {
  */
 async function getUrgentRequestsCount() {
   try {
-    if (!doc) return 0;
+    if (!sheetsPool.isReady) return 0;
     
-    await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
-    if (!sheet) return 0;
-    
-    const rows = await sheet.getRows();
-    const pendingCount = rows.filter(row => {
-      const status = row.get('Status') || row.get('Статус');
-      return status === 'pending_hr' || status === 'pending_pm';
-    }).length;
-    
-    return pendingCount;
+    return await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
+      if (!sheet) return 0;
+      
+      const rows = await sheet.getRows();
+      return rows.filter(row => {
+        const status = row.get('Status') || row.get('Статус');
+        return status === 'pending_hr' || status === 'pending_pm';
+      }).length;
+    });
   } catch (error) {
     console.error('❌ Помилка getUrgentRequestsCount:', error);
     return 0;
@@ -2156,39 +2155,36 @@ async function getUrgentRequestsCount() {
  */
 async function getCriticalAlertsCount() {
   try {
-    if (!doc) return 0;
+    if (!sheetsPool.isReady) return 0;
     
-    await doc.loadInfo();
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-    
-    // Критичні спізнення (>7 за місяць)
-    const latesSheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
-    if (!latesSheet) return 0;
-    
-    const latesRows = await latesSheet.getRows();
-    const monthLates = latesRows.filter(row => {
-      const dateStr = row.get('Date') || row.get('Дата');
-      if (!dateStr) return false;
-      const date = new Date(dateStr);
-      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    return await sheetsPool.execute(async (poolDoc) => {
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+      
+      const latesSheet = poolDoc.sheetsByTitle['Спізнення'] || poolDoc.sheetsByTitle['Lates'];
+      if (!latesSheet) return 0;
+      
+      const latesRows = await latesSheet.getRows();
+      const userLatesCount = new Map();
+      
+      for (const row of latesRows) {
+        const dateStr = row.get('Date') || row.get('Дата');
+        if (!dateStr) continue;
+        const date = new Date(dateStr);
+        if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
+          const userId = row.get('TelegramID');
+          userLatesCount.set(userId, (userLatesCount.get(userId) || 0) + 1);
+        }
+      }
+      
+      let criticalCount = 0;
+      userLatesCount.forEach(count => {
+        if (count > 7) criticalCount++;
+      });
+      
+      return criticalCount;
     });
-    
-    // Групуємо по користувачах
-    const userLatesCount = new Map();
-    monthLates.forEach(row => {
-      const userId = row.get('TelegramID');
-      userLatesCount.set(userId, (userLatesCount.get(userId) || 0) + 1);
-    });
-    
-    // Рахуємо користувачів з >7 спізнень
-    let criticalCount = 0;
-    userLatesCount.forEach(count => {
-      if (count > 7) criticalCount++;
-    });
-    
-    return criticalCount;
   } catch (error) {
     console.error('❌ Помилка getCriticalAlertsCount:', error);
     return 0;
@@ -2198,25 +2194,24 @@ async function getCriticalAlertsCount() {
 /**
  * Отримує кількість заявок на затвердження для PM
  */
-async function getPendingApprovalsCount(telegramId) {
+async function getPendingApprovalsCount(telegramId, existingUser = null) {
   try {
-    if (!doc) return 0;
+    if (!sheetsPool.isReady) return 0;
     
-    const user = await getUserInfo(telegramId);
+    const user = existingUser || await getUserInfo(telegramId);
     if (!user || !user.team) return 0;
     
-    await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
-    if (!sheet) return 0;
-    
-    const rows = await sheet.getRows();
-    const pendingCount = rows.filter(row => {
-      const status = row.get('Status') || row.get('Статус');
-      const rowTeam = row.get('Team') || row.get('Команда');
-      return status === 'pending_pm' && rowTeam === user.team;
-    }).length;
-    
-    return pendingCount;
+    return await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
+      if (!sheet) return 0;
+      
+      const rows = await sheet.getRows();
+      return rows.filter(row => {
+        const status = row.get('Status') || row.get('Статус');
+        const rowTeam = row.get('Team') || row.get('Команда');
+        return status === 'pending_pm' && rowTeam === user.team;
+      }).length;
+    });
   } catch (error) {
     console.error('❌ Помилка getPendingApprovalsCount:', error);
     return 0;
@@ -2228,21 +2223,22 @@ async function getPendingApprovalsCount(telegramId) {
  */
 async function checkRemoteToday(telegramId) {
   try {
-    if (!doc) return false;
+    if (!sheetsPool.isReady) return false;
     
-    await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Remotes'];
-    if (!sheet) return false;
-    
-    const rows = await sheet.getRows();
-    const todayStr = new Date().toISOString().split('T')[0];
-    
-    return rows.some(row => {
-      const rowTelegramId = row.get('TelegramID');
-      const rowDate = row.get('Date');
-      if (!rowTelegramId || !rowDate) return false;
-      const normalizedDate = new Date(rowDate).toISOString().split('T')[0];
-      return rowTelegramId == telegramId && normalizedDate === todayStr;
+    return await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Remotes'];
+      if (!sheet) return false;
+      
+      const rows = await sheet.getRows();
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      return rows.some(row => {
+        const rowTelegramId = row.get('TelegramID');
+        const rowDate = row.get('Date');
+        if (!rowTelegramId || !rowDate) return false;
+        const normalizedDate = new Date(rowDate).toISOString().split('T')[0];
+        return rowTelegramId == telegramId && normalizedDate === todayStr;
+      });
     });
   } catch (error) {
     console.error('❌ Помилка checkRemoteToday:', error);
@@ -2255,21 +2251,22 @@ async function checkRemoteToday(telegramId) {
  */
 async function checkLateToday(telegramId) {
   try {
-    if (!doc) return false;
+    if (!sheetsPool.isReady) return false;
     
-    await doc.loadInfo();
-    const sheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
-    if (!sheet) return false;
-    
-    const rows = await sheet.getRows();
-    const todayStr = new Date().toISOString().split('T')[0];
-    
-    return rows.some(row => {
-      const rowTelegramId = row.get('TelegramID');
-      const rowDate = row.get('Date') || row.get('Дата');
-      if (!rowTelegramId || !rowDate) return false;
-      const normalizedDate = new Date(rowDate).toISOString().split('T')[0];
-      return rowTelegramId == telegramId && normalizedDate === todayStr;
+    return await sheetsPool.execute(async (poolDoc) => {
+      const sheet = poolDoc.sheetsByTitle['Спізнення'] || poolDoc.sheetsByTitle['Lates'];
+      if (!sheet) return false;
+      
+      const rows = await sheet.getRows();
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      return rows.some(row => {
+        const rowTelegramId = row.get('TelegramID');
+        const rowDate = row.get('Date') || row.get('Дата');
+        if (!rowTelegramId || !rowDate) return false;
+        const normalizedDate = new Date(rowDate).toISOString().split('T')[0];
+        return rowTelegramId == telegramId && normalizedDate === todayStr;
+      });
     });
   } catch (error) {
     console.error('❌ Помилка checkLateToday:', error);
@@ -2299,72 +2296,47 @@ async function getRecentActivity(telegramId) {
 /**
  * Показує контекстні швидкі дії (inline кнопки)
  */
-async function showContextualQuickActions(chatId, telegramId) {
+async function showContextualQuickActions(chatId, telegramId, { role, user, urgentCount = 0, pendingCount = 0 } = {}) {
   try {
-    const [role, user, recentActivity] = await Promise.all([
-      getUserRole(telegramId),
-      getUserInfo(telegramId),
-      getRecentActivity(telegramId)
-    ]);
-    
     if (!user) return;
     
     const quickActions = [];
     const today = new Date();
     
-    // Якщо сьогодні понеділок і ще не повідомив про remote
+    const contextChecks = [];
+    
     if (today.getDay() === 1) {
-      const remoteToday = await checkRemoteToday(telegramId);
-      if (!remoteToday) {
-        quickActions.push({
-          text: '⚡ Remote сьогодні',
-          callback_data: 'quick_remote_today',
-          priority: 10
-        });
-      }
+      contextChecks.push(
+        checkRemoteToday(telegramId).then(done => {
+          if (!done) quickActions.push({ text: '⚡ Remote сьогодні', callback_data: 'quick_remote_today', priority: 10 });
+        })
+      );
     }
     
-    // Якщо пізно прийшов (після 10:21) і ще не повідомив про спізнення
     const currentHour = today.getHours();
     const currentMinute = today.getMinutes();
     if (currentHour > 10 || (currentHour === 10 && currentMinute > 21)) {
-      const lateToday = await checkLateToday(telegramId);
-      if (!lateToday) {
-        quickActions.push({
-          text: '⚡ Спізнення сьогодні',
-          callback_data: 'quick_late_today',
-          priority: 15
-        });
-      }
+      contextChecks.push(
+        checkLateToday(telegramId).then(done => {
+          if (!done) quickActions.push({ text: '⚡ Спізнення сьогодні', callback_data: 'quick_late_today', priority: 15 });
+        })
+      );
     }
     
-    // Для HR: якщо є незатверджені заявки
-    if (role === 'HR') {
-      const pendingCount = await getUrgentRequestsCount();
-      if (pendingCount > 0) {
-        quickActions.push({
-          text: `⚡ Переглянути ${pendingCount} заявок`,
-          callback_data: 'quick_review_requests',
-          priority: 20
-        });
-      }
+    if (contextChecks.length > 0) {
+      await Promise.all(contextChecks);
     }
     
-    // Для PM/TL: якщо є заявки на затвердження
-    if (role === 'PM' || role === 'TL') {
-      const myApprovals = await getPendingApprovalsCount(telegramId);
-      if (myApprovals > 0) {
-        quickActions.push({
-          text: `⚡ Затвердити ${myApprovals} заявок`,
-          callback_data: 'quick_approve_requests',
-          priority: 20
-        });
-      }
+    if (role === 'HR' && urgentCount > 0) {
+      quickActions.push({ text: `⚡ Переглянути ${urgentCount} заявок`, callback_data: 'quick_review_requests', priority: 20 });
+    }
+    
+    if ((role === 'PM' || role === 'TL') && pendingCount > 0) {
+      quickActions.push({ text: `⚡ Затвердити ${pendingCount} заявок`, callback_data: 'quick_approve_requests', priority: 20 });
     }
     
     if (quickActions.length === 0) return;
     
-    // Сортуємо за пріоритетом та показуємо максимум 3 дії
     quickActions.sort((a, b) => b.priority - a.priority);
     
     const keyboard = {
@@ -2446,7 +2418,7 @@ async function showMainMenu(chatId, telegramId) {
     } else if (role === 'CEO') {
       badgePromises.push(getCriticalAlertsCount().then(count => { criticalCount = count; }));
     } else if (role === 'PM' || role === 'TL') {
-      badgePromises.push(getPendingApprovalsCount(telegramId).then(count => { pendingCount = count; }));
+      badgePromises.push(getPendingApprovalsCount(telegramId, user).then(count => { pendingCount = count; }));
     }
     
     // Чекаємо на завантаження бейджів
@@ -2531,8 +2503,7 @@ async function showMainMenu(chatId, telegramId) {
 
     await sendMessage(chatId, welcomeText, baseKeyboard);
     
-    // Показуємо контекстні швидкі дії (якщо є)
-    await showContextualQuickActions(chatId, telegramId);
+    await showContextualQuickActions(chatId, telegramId, { role, user, urgentCount, pendingCount });
     
     // Логування входу в головне меню
     await logUserData(telegramId, 'main_menu_access', { 
