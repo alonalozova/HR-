@@ -1323,6 +1323,7 @@ async function processCallback(callbackQuery) {
       'hr_reports': () => showHRReportsMenu(chatId, telegramId),
       'hr_settings': () => showHRSettingsMenu(chatId, telegramId),
       'hr_dashboard': () => showHRDashboardStats(chatId, telegramId),
+      'hr_dashboard_refresh': () => showHRDashboardStats(chatId, telegramId, callbackQuery.message?.message_id),
       'hr_reports_vacations': async () => {
         logger.info('HR reports vacations callback', { telegramId, chatId });
         console.log('📊 HR reports vacations callback:', { telegramId, chatId });
@@ -8646,12 +8647,12 @@ async function saveSickRecord(telegramId, user, startDate, endDate = null) {
 
 // 📊 ДАШБОРД СТАТИСТИКИ ДЛЯ HR/CEO
 /**
- * Показує загальну статистику для HR та CEO
+ * Показує HR дашборд з прогресивним завантаженням (скелетон → базова інфо → повна інфо)
  * @param {number} chatId - ID чату
  * @param {number} telegramId - Telegram ID користувача
- * @returns {Promise<void>}
+ * @param {number|null} editMessageId - ID повідомлення для оновлення (при refresh)
  */
-async function showHRDashboardStats(chatId, telegramId) {
+async function showHRDashboardStats(chatId, telegramId, editMessageId = null) {
   try {
     const role = await getUserRole(telegramId);
     if (role !== 'HR' && role !== 'CEO') {
@@ -8659,121 +8660,168 @@ async function showHRDashboardStats(chatId, telegramId) {
       return;
     }
 
-    if (!doc) {
+    if (!sheetsPool.isReady) {
       await sendMessage(chatId, '❌ Google Sheets не підключено.');
       return;
     }
 
-    return executeWithRetryAndMonitor(
-      async () => {
-        await doc.loadInfo();
-        const now = new Date();
-        const currentMonth = now.getMonth();
-        const currentYear = now.getFullYear();
+    // Фаза 1: скелетон
+    let msgId = editMessageId;
+    if (!msgId) {
+      const sent = await bot.sendMessage(chatId, '📊 <b>Завантаження дашборду...</b>\n\n⏳ Отримую дані...', { parse_mode: 'HTML' });
+      msgId = sent.message_id;
+    } else {
+      await bot.editMessageText('📊 <b>Завантаження дашборду...</b>\n\n⏳ Отримую дані...', {
+        chat_id: chatId, message_id: msgId, parse_mode: 'HTML'
+      });
+    }
 
-        // Отримуємо статистику по відпустках
-        const vacationsSheet = doc.sheetsByTitle['Відпустки'] || doc.sheetsByTitle['Vacations'];
-        const allVacations = vacationsSheet ? await vacationsSheet.getRows() : [];
-        
-        const thisMonthVacations = allVacations.filter(v => {
-          const date = new Date(v.get('CreatedAt') || v.get('StartDate'));
-          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
-        });
-        
-        const pendingVacations = thisMonthVacations.filter(v => 
-          v.get('Status') === 'pending_pm' || v.get('Status') === 'pending_hr'
-        );
-        
-        const approvedVacations = thisMonthVacations.filter(v => 
-          v.get('Status') === 'approved'
-        );
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    const periodLabel = now.toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' });
 
-        // Отримуємо статистику по спізненнях
-        const latesSheet = doc.sheetsByTitle['Спізнення'] || doc.sheetsByTitle['Lates'];
-        const allLates = latesSheet ? await latesSheet.getRows() : [];
-        
-        const thisMonthLates = allLates.filter(l => {
-          const date = new Date(l.get('Date'));
-          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
-        });
+    const isThisMonth = (dateStr) => {
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
+      return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+    };
 
-        // Отримуємо статистику по Remote
-        const remotesSheet = doc.sheetsByTitle['Remotes'];
-        const allRemotes = remotesSheet ? await remotesSheet.getRows() : [];
-        
-        const thisMonthRemotes = allRemotes.filter(r => {
-          const date = new Date(r.get('Date'));
-          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
-        });
-
-        // Отримуємо статистику по лікарняних
-        const sickSheet = doc.sheetsByTitle['Sick'];
-        const allSick = sickSheet ? await sickSheet.getRows() : [];
-        
-        const thisMonthSick = allSick.filter(s => {
-          const date = new Date(s.get('Date'));
-          return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
-        });
-
-        // Отримуємо кількість працівників
-        const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
-        const allEmployees = employeesSheet ? await employeesSheet.getRows() : [];
-        const totalEmployees = allEmployees.length;
-
-        // Формуємо звіт
-        let report = `📊 <b>ДАШБОРД СТАТИСТИКИ</b>\n\n`;
-        report += `📅 <b>Період:</b> ${now.toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' })}\n`;
-        report += `👥 <b>Всього працівників:</b> ${totalEmployees}\n\n`;
-
-        report += `🏖️ <b>ВІДПУСТКИ</b>\n`;
-        report += `• Заявок за місяць: ${thisMonthVacations.length}\n`;
-        report += `• Очікують затвердження: ${pendingVacations.length}\n`;
-        report += `• Затверджено: ${approvedVacations.length}\n\n`;
-
-        report += `⏰ <b>СПІЗНЕННЯ</b>\n`;
-        report += `• Записів за місяць: ${thisMonthLates.length}\n`;
-        const criticalLates = thisMonthLates.length > 7 ? thisMonthLates.length : 0;
-        if (criticalLates > 0) {
-          report += `⚠️ <b>Критичних випадків (>7): ${criticalLates}</b>\n`;
-        }
-        report += `\n`;
-
-        report += `🏠 <b>REMOTE</b>\n`;
-        report += `• Днів за місяць: ${thisMonthRemotes.length}\n\n`;
-
-        report += `🏥 <b>ЛІКАРНЯНІ</b>\n`;
-        report += `• Днів за місяць: ${thisMonthSick.length}\n\n`;
-
-        // Алерти
-        if (pendingVacations.length > 0) {
-          report += `⚠️ <b>Увага!</b> Є ${pendingVacations.length} заявок на відпустку, що очікують затвердження.\n`;
-        }
-
-        if (criticalLates > 0) {
-          report += `🚨 <b>Критично!</b> ${criticalLates} працівників мають більше 7 спізнень за місяць.\n`;
-        }
-
-        await sendMessage(chatId, report);
-
-        const keyboard = {
-          inline_keyboard: [
-            [
-              { text: '📤 Експорт даних', callback_data: role === 'CEO' ? 'ceo_export' : 'hr_export' },
-              { text: '📋 Детальні звіти', callback_data: role === 'CEO' ? 'ceo_panel' : 'hr_panel' }
-            ],
-            [
-              { text: '⬅️ Головне меню', callback_data: 'back_to_main' }
-            ]
-          ]
+    // Фаза 2: базова інформація (працівники + сьогоднішні дані) — паралельно
+    const [employeeCount, todayStats] = await Promise.all([
+      sheetsPool.execute(async (poolDoc) => {
+        const sheet = poolDoc.sheetsByTitle['Працівники'] || poolDoc.sheetsByTitle['Employees'];
+        return sheet ? (await sheet.getRows()).length : 0;
+      }),
+      sheetsPool.execute(async (poolDoc) => {
+        const todayStr = now.toISOString().split('T')[0];
+        const isToday = (dateStr) => {
+          if (!dateStr) return false;
+          try { return new Date(dateStr).toISOString().split('T')[0] === todayStr; } catch { return false; }
         };
-        await sendMessage(chatId, 'Оберіть дію:', keyboard);
-      },
-      'showHRDashboardStats',
-      { telegramId, role }
+
+        const [remoteSheet, latesSheet, sickSheet] = [
+          poolDoc.sheetsByTitle['Remotes'],
+          poolDoc.sheetsByTitle['Спізнення'] || poolDoc.sheetsByTitle['Lates'],
+          poolDoc.sheetsByTitle['Sick']
+        ];
+
+        const [remoteRows, lateRows, sickRows] = await Promise.all([
+          remoteSheet ? remoteSheet.getRows() : [],
+          latesSheet ? latesSheet.getRows() : [],
+          sickSheet ? sickSheet.getRows() : []
+        ]);
+
+        return {
+          remote: remoteRows.filter(r => isToday(r.get('Date'))).length,
+          late: lateRows.filter(r => isToday(r.get('Date') || r.get('Дата'))).length,
+          sick: sickRows.filter(r => isToday(r.get('Date'))).length
+        };
+      })
+    ]);
+
+    // Оновлюємо: базова інфо
+    await bot.editMessageText(
+      `📊 <b>HR ДАШБОРД</b>\n` +
+      `📅 <b>Період:</b> ${periodLabel}\n\n` +
+      `👥 <b>Всього працівників:</b> ${employeeCount}\n\n` +
+      `📅 <b>Сьогодні:</b>\n` +
+      `  🏠 Remote: ${todayStats.remote}\n` +
+      `  ⏰ Спізнення: ${todayStats.late}\n` +
+      `  🏥 Лікарняні: ${todayStats.sick}\n\n` +
+      `⏳ Завантажую детальну статистику...`,
+      { chat_id: chatId, message_id: msgId, parse_mode: 'HTML' }
     );
+
+    // Фаза 3: детальна статистика — паралельно через пул
+    const [vacationStats, lateStats, remoteStats] = await Promise.all([
+      sheetsPool.execute(async (poolDoc) => {
+        const sheet = poolDoc.sheetsByTitle['Відпустки'] || poolDoc.sheetsByTitle['Vacations'];
+        if (!sheet) return { total: 0, pending: 0, approved: 0 };
+        const rows = await sheet.getRows();
+        const monthly = rows.filter(r => isThisMonth(r.get('CreatedAt') || r.get('StartDate')));
+        return {
+          total: monthly.length,
+          pending: monthly.filter(r => { const s = r.get('Status') || r.get('Статус'); return s === 'pending_pm' || s === 'pending_hr'; }).length,
+          approved: monthly.filter(r => (r.get('Status') || r.get('Статус')) === 'approved').length
+        };
+      }),
+      sheetsPool.execute(async (poolDoc) => {
+        const sheet = poolDoc.sheetsByTitle['Спізнення'] || poolDoc.sheetsByTitle['Lates'];
+        if (!sheet) return { total: 0, critical: 0 };
+        const rows = await sheet.getRows();
+        const monthly = rows.filter(r => isThisMonth(r.get('Date') || r.get('Дата')));
+        const perUser = new Map();
+        monthly.forEach(r => {
+          const uid = r.get('TelegramID');
+          perUser.set(uid, (perUser.get(uid) || 0) + 1);
+        });
+        let critical = 0;
+        perUser.forEach(count => { if (count > 7) critical++; });
+        return { total: monthly.length, critical };
+      }),
+      sheetsPool.execute(async (poolDoc) => {
+        const sheet = poolDoc.sheetsByTitle['Remotes'];
+        if (!sheet) return { days: 0, users: 0 };
+        const rows = await sheet.getRows();
+        const monthly = rows.filter(r => isThisMonth(r.get('Date')));
+        const uniqueUsers = new Set(monthly.map(r => r.get('TelegramID')));
+        return { days: monthly.length, users: uniqueUsers.size };
+      })
+    ]);
+
+    // Фінальне повідомлення
+    let report = `📊 <b>HR ДАШБОРД</b>\n`;
+    report += `📅 <b>Період:</b> ${periodLabel}\n`;
+    report += `👥 <b>Всього працівників:</b> ${employeeCount}\n\n`;
+
+    report += `📅 <b>Сьогодні:</b>\n`;
+    report += `  🏠 Remote: ${todayStats.remote}\n`;
+    report += `  ⏰ Спізнення: ${todayStats.late}\n`;
+    report += `  🏥 Лікарняні: ${todayStats.sick}\n\n`;
+
+    report += `🏖️ <b>Відпустки (місяць):</b>\n`;
+    report += `  Заявок: ${vacationStats.total}\n`;
+    report += `  Очікують: ${vacationStats.pending}\n`;
+    report += `  Затверджено: ${vacationStats.approved}\n\n`;
+
+    report += `⏰ <b>Спізнення (місяць):</b>\n`;
+    report += `  Всього: ${lateStats.total}\n`;
+    if (lateStats.critical > 0) {
+      report += `  🚨 Критичних (>7): ${lateStats.critical}\n`;
+    }
+    report += `\n`;
+
+    report += `🏠 <b>Remote (місяць):</b>\n`;
+    report += `  Днів: ${remoteStats.days}\n`;
+    report += `  Працівників: ${remoteStats.users}\n\n`;
+
+    if (vacationStats.pending > 0) {
+      report += `⚠️ ${vacationStats.pending} заявок очікують затвердження\n`;
+    }
+    if (lateStats.critical > 0) {
+      report += `🚨 ${lateStats.critical} працівників з >7 спізненнями\n`;
+    }
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '📤 Експорт даних', callback_data: role === 'CEO' ? 'ceo_export' : 'hr_export' },
+          { text: '🔄 Оновити', callback_data: 'hr_dashboard_refresh' }
+        ],
+        [
+          { text: '📋 Детальні звіти', callback_data: role === 'CEO' ? 'ceo_panel' : 'hr_panel' },
+          { text: '⬅️ Головне меню', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+
+    await bot.editMessageText(report, {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: keyboard
+    });
   } catch (error) {
     logger.error('Failed to show HR dashboard stats', error, { telegramId });
-    await sendMessage(chatId, '❌ Помилка завантаження статистики. Спробуйте пізніше.');
+    await sendMessage(chatId, '❌ Помилка завантаження дашборду. Спробуйте пізніше.');
   }
 }
 
