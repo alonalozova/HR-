@@ -488,59 +488,150 @@ class UserIndex {
   constructor() {
     this.byTelegramId = new Map();
     this.byName = new Map();
+    this.byDepartment = new Map();
+    this.byTeam = new Map();
     this.lastUpdate = null;
+    this._rebuildPromise = null;
+    this.STALE_TTL = 5 * 60 * 1000; // 5 хвилин
   }
 
-  /**
-   * Додає або оновлює користувача в індексі
-   * @param {User} user - Об'єкт користувача
-   */
   add(user) {
     if (!user || !user.telegramId || !user.fullName) return;
     
-    this.byTelegramId.set(user.telegramId.toString(), user);
+    const id = user.telegramId.toString();
+    this.byTelegramId.set(id, user);
     
-    // Індексуємо по імені (нижній регістр для пошуку)
     const nameKey = user.fullName.toLowerCase();
     if (!this.byName.has(nameKey)) {
       this.byName.set(nameKey, []);
     }
     const nameList = this.byName.get(nameKey);
-    if (!nameList.find(u => u.telegramId === user.telegramId)) {
+    if (!nameList.find(u => String(u.telegramId) === id)) {
       nameList.push(user);
+    }
+
+    if (user.department) {
+      if (!this.byDepartment.has(user.department)) {
+        this.byDepartment.set(user.department, []);
+      }
+      const deptList = this.byDepartment.get(user.department);
+      if (!deptList.find(u => String(u.telegramId) === id)) {
+        deptList.push(user);
+      }
+    }
+
+    if (user.team) {
+      if (!this.byTeam.has(user.team)) {
+        this.byTeam.set(user.team, []);
+      }
+      const teamList = this.byTeam.get(user.team);
+      if (!teamList.find(u => String(u.telegramId) === id)) {
+        teamList.push(user);
+      }
     }
     
     this.lastUpdate = Date.now();
   }
 
-  /**
-   * Видаляє користувача з індексу
-   * @param {number|string} telegramId - Telegram ID
-   */
   remove(telegramId) {
     const id = telegramId.toString();
     const user = this.byTelegramId.get(id);
-    if (user) {
-      this.byTelegramId.delete(id);
-      const nameKey = user.fullName.toLowerCase();
-      const nameList = this.byName.get(nameKey);
-      if (nameList) {
-        const index = nameList.findIndex(u => u.telegramId === user.telegramId);
-        if (index !== -1) {
-          nameList.splice(index, 1);
-          if (nameList.length === 0) {
-            this.byName.delete(nameKey);
-          }
-        }
-      }
-    }
+    if (!user) return;
+
+    this.byTelegramId.delete(id);
+
+    const removeFrom = (map, key) => {
+      const list = map.get(key);
+      if (!list) return;
+      const idx = list.findIndex(u => String(u.telegramId) === id);
+      if (idx !== -1) list.splice(idx, 1);
+      if (list.length === 0) map.delete(key);
+    };
+
+    removeFrom(this.byName, user.fullName.toLowerCase());
+    if (user.department) removeFrom(this.byDepartment, user.department);
+    if (user.team) removeFrom(this.byTeam, user.team);
   }
 
   /**
-   * Шукає користувачів за терміном пошуку
-   * @param {string} term - Термін пошуку
-   * @returns {Array<User>} Масив користувачів, відсортований за релевантністю
+   * Повне перезавантаження індексу з Google Sheets через пул з'єднань.
    */
+  async rebuild() {
+    if (this._rebuildPromise) return this._rebuildPromise;
+
+    this._rebuildPromise = (async () => {
+      try {
+        if (!sheetsPool.isReady) {
+          console.warn('⚠️ sheetsPool не готовий для rebuild індексу');
+          return;
+        }
+
+        await sheetsPool.execute(async (poolDoc) => {
+          const sheet = poolDoc.sheetsByTitle['Працівники'] || poolDoc.sheetsByTitle['Employees'];
+          if (!sheet) return;
+
+          const rows = await sheet.getRows();
+
+          this.byTelegramId.clear();
+          this.byName.clear();
+          this.byDepartment.clear();
+          this.byTeam.clear();
+
+          let count = 0;
+          for (const row of rows) {
+            const userData = mapRowToUserData(row, sheet.title);
+            if (userData && userData.telegramId && userData.fullName) {
+              this.add(userData);
+              count++;
+            }
+          }
+
+          this.lastUpdate = Date.now();
+          console.log(`✅ Індекс перебудовано: ${count} користувачів, ${this.byDepartment.size} відділів, ${this.byTeam.size} команд`);
+        });
+      } catch (error) {
+        console.error('❌ Помилка rebuild індексу:', error.message);
+      } finally {
+        this._rebuildPromise = null;
+      }
+    })();
+
+    return this._rebuildPromise;
+  }
+
+  /**
+   * Перевіряє чи індекс свіжий, якщо ні — оновлює у фоні.
+   */
+  async ensureFresh() {
+    if (!this.lastUpdate || Date.now() - this.lastUpdate > this.STALE_TTL) {
+      await this.rebuild();
+    }
+  }
+
+  get(telegramId) {
+    return this.byTelegramId.get(telegramId.toString()) || null;
+  }
+
+  getByDepartment(department) {
+    return this.byDepartment.get(department) || [];
+  }
+
+  getByTeam(team) {
+    return this.byTeam.get(team) || [];
+  }
+
+  /**
+   * Знаходить PM для відділу/команди з індексу (без Google Sheets запиту)
+   */
+  findPMInTeam(department, team) {
+    const teamMembers = this.getByTeam(team);
+    const pm = teamMembers.find(u =>
+      u.department === department &&
+      u.position && (u.position.includes('PM') || u.position.includes('Project Manager'))
+    );
+    return pm ? { telegramId: pm.telegramId, fullName: pm.fullName } : null;
+  }
+
   search(term) {
     if (!term || term.length < 2) return [];
     
@@ -557,78 +648,38 @@ class UserIndex {
     return results.sort((a, b) => b.score - a.score);
   }
 
-  /**
-   * Обчислює релевантність користувача для пошукового терміну
-   * @param {User} user - Об'єкт користувача
-   * @param {string} term - Термін пошуку (вже в нижньому регістрі)
-   * @returns {number} Score релевантності (0 = не підходить)
-   */
   calculateScore(user, term) {
     if (!user.fullName) return 0;
     
     let score = 0;
     const fullName = user.fullName.toLowerCase();
     
-    // Точний збіг - найвищий score
-    if (fullName === term) {
-      score += 100;
-    }
+    if (fullName === term) score += 100;
+    if (fullName.startsWith(term)) score += 50;
+    if (fullName.includes(term)) score += 25;
     
-    // Початок імені
-    if (fullName.startsWith(term)) {
-      score += 50;
-    }
-    
-    // Містить термін
-    if (fullName.includes(term)) {
-      score += 25;
-    }
-    
-    // Fuzzy match (приблизний збіг по словах)
     const words = fullName.split(/\s+/);
     for (const word of words) {
-      if (word.startsWith(term)) {
-        score += 10;
-      } else if (word.includes(term)) {
-        score += 5;
-      }
+      if (word.startsWith(term)) score += 10;
+      else if (word.includes(term)) score += 5;
     }
     
-    // Бонус за відділ/команду, якщо вони містять термін
-    if (user.department && user.department.toLowerCase().includes(term)) {
-      score += 3;
-    }
-    if (user.team && user.team.toLowerCase().includes(term)) {
-      score += 3;
-    }
+    if (user.department && user.department.toLowerCase().includes(term)) score += 3;
+    if (user.team && user.team.toLowerCase().includes(term)) score += 3;
     
     return score;
   }
 
-  /**
-   * Очищає індекс
-   */
   clear() {
     this.byTelegramId.clear();
     this.byName.clear();
+    this.byDepartment.clear();
+    this.byTeam.clear();
     this.lastUpdate = null;
   }
 
-  /**
-   * Отримує кількість користувачів в індексі
-   * @returns {number}
-   */
   size() {
     return this.byTelegramId.size;
-  }
-
-  /**
-   * Отримує користувача за Telegram ID
-   * @param {number|string} telegramId - Telegram ID
-   * @returns {User|null}
-   */
-  get(telegramId) {
-    return this.byTelegramId.get(telegramId.toString()) || null;
   }
 }
 
@@ -2049,11 +2100,9 @@ async function saveUserRole(telegramId, role, position, department) {
  */
 async function getPMForUser(user) {
   try {
-    if (!doc || !user) return null;
+    if (!user) return null;
     
-    // Перевіряємо чи є PM у полі користувача
     if (user.pm) {
-      // Якщо PM вказаний як Telegram ID
       const pmId = parseInt(user.pm);
       if (!isNaN(pmId)) {
         const pmUser = await getUserInfo(pmId);
@@ -2063,37 +2112,11 @@ async function getPMForUser(user) {
       }
     }
     
-    // Шукаємо PM по градації (відділ/команда)
-    await doc.loadInfo();
-    const employeesSheet = doc.sheetsByTitle['Працівники'] || doc.sheetsByTitle['Employees'];
-    if (!employeesSheet) return null;
-    
-    const rows = await employeesSheet.getRows();
-    
-    // Шукаємо PM в тому ж відділі/команді
-    const pmRow = rows.find(row => {
-      const department = row.get('Department');
-      const team = row.get('Team');
-      const position = row.get('Position');
-      const telegramId = row.get('TelegramID');
-      
-      // Перевіряємо чи це PM в тому ж відділі/команді
-      if (department === user.department && team === user.team) {
-        // Перевіряємо чи посада містить PM
-        if (position && (position.includes('PM') || position.includes('Project Manager'))) {
-          return true;
-        }
-      }
-      
-      return false;
-    });
-    
-    if (pmRow) {
-      const pmTelegramId = parseInt(pmRow.get('TelegramID'));
-      const pmFullName = pmRow.get('FullName');
-      if (!isNaN(pmTelegramId) && pmFullName) {
-        return { telegramId: pmTelegramId, fullName: pmFullName };
-      }
+    // Швидкий пошук PM в індексі (без Google Sheets запиту)
+    await userIndex.ensureFresh();
+    if (user.department && user.team) {
+      const pmFromIndex = userIndex.findPMInTeam(user.department, user.team);
+      if (pmFromIndex) return pmFromIndex;
     }
     
     return null;
@@ -8788,36 +8811,7 @@ async function showHRDashboardStats(chatId, telegramId) {
  * Завантажує всіх користувачів з Google Sheets в індекс для швидкого пошуку
  */
 async function loadUsersIntoIndex() {
-  try {
-    if (!doc) {
-      console.warn('⚠️ Google Sheets не підключено, пропускаємо завантаження індексу');
-      return;
-    }
-    
-    // Обгортаємо в чергу для запобігання rate limit
-    await sheetsPool.execute(async (poolDoc) => {
-      const sheet = poolDoc.sheetsByTitle['Працівники'] || poolDoc.sheetsByTitle['Employees'];
-      if (!sheet) {
-        console.warn('⚠️ Таблиця Працівники/Employees не знайдена для завантаження індексу');
-        return;
-      }
-      
-      const rows = await sheet.getRows();
-      let loadedCount = 0;
-      
-      for (const row of rows) {
-        const userData = mapRowToUserData(row, sheet.title);
-        if (userData && userData.telegramId && userData.fullName) {
-          userIndex.add(userData);
-          loadedCount++;
-        }
-      }
-      
-      console.log(`✅ Завантажено ${loadedCount} користувачів в індекс`);
-    });
-  } catch (error) {
-    console.error('❌ Помилка завантаження користувачів в індекс:', error);
-  }
+  await userIndex.rebuild();
 }
 
 // 🔍 ОБРОБКА INLINE QUERY ДЛЯ ШВИДКОГО ПОШУКУ ПРАЦІВНИКІВ
