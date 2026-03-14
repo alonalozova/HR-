@@ -973,8 +973,10 @@ async function processMessage(message) {
     
     // Команда /myrole для перевірки поточної ролі
     if (text === '/myrole' || text === '/myrole@' + (process.env.BOT_USERNAME || '')) {
-      const role = await getUserRole(telegramId);
-      const user = await getUserInfo(telegramId);
+      const [role, user] = await Promise.all([
+        getUserRole(telegramId),
+        getUserInfo(telegramId)
+      ]);
       const roleNames = {
         'HR': 'HR',
         'CEO': 'CEO',
@@ -3746,23 +3748,18 @@ function isInWorkYear(date, firstWorkDay) {
 // 🏖️ ЗВІТ ПО ВІДПУСТКАХ
 async function showVacationStatsReport(chatId, telegramId, targetTelegramId = null) {
   try {
-    // Перевірка доступу та отримання даних паралельно
-    const role = await getUserRole(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(targetTelegramId || telegramId)
+    ]);
     const isHRorCEO = role === 'HR' || role === 'CEO';
-    
-    // Якщо не HR/CEO, можна бачити тільки свою статистику
-    const reportTelegramId = targetTelegramId && isHRorCEO ? targetTelegramId : telegramId;
     
     if (targetTelegramId && !isHRorCEO) {
       await sendMessage(chatId, '❌ Доступ обмежено. Ви можете переглядати тільки свою статистику.');
       return;
     }
     
-    // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showStatsMenu', {});
-    
-    // Отримуємо дані користувача (вже знаємо reportTelegramId)
-    const user = await getUserInfo(reportTelegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений.');
       return;
@@ -3860,21 +3857,18 @@ async function showVacationStatsReport(chatId, telegramId, targetTelegramId = nu
 // 🏠 ЗВІТ ПО REMOTE РОБОТІ
 async function showRemoteStatsReport(chatId, telegramId, targetTelegramId = null) {
   try {
-    // Перевірка доступу
-    const role = await getUserRole(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(targetTelegramId || telegramId)
+    ]);
     const isHRorCEO = role === 'HR' || role === 'CEO';
-    
-    const reportTelegramId = targetTelegramId && isHRorCEO ? targetTelegramId : telegramId;
     
     if (targetTelegramId && !isHRorCEO) {
       await sendMessage(chatId, '❌ Доступ обмежено. Ви можете переглядати тільки свою статистику.');
       return;
     }
     
-    // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showStatsMenu', {});
-    
-    const user = await getUserInfo(reportTelegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений.');
       return;
@@ -3962,21 +3956,18 @@ async function showRemoteStatsReport(chatId, telegramId, targetTelegramId = null
 // ⏰ ЗВІТ ПО СПІЗНЕННЯХ
 async function showLatesStatsReport(chatId, telegramId, targetTelegramId = null, month = null, year = null) {
   try {
-    // Перевірка доступу
-    const role = await getUserRole(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(targetTelegramId || telegramId)
+    ]);
     const isHRorCEO = role === 'HR' || role === 'CEO';
-    
-    const reportTelegramId = targetTelegramId && isHRorCEO ? targetTelegramId : telegramId;
     
     if (targetTelegramId && !isHRorCEO) {
       await sendMessage(chatId, '❌ Доступ обмежено. Ви можете переглядати тільки свою статистику.');
       return;
     }
     
-    // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showStatsMenu', {});
-    
-    const user = await getUserInfo(reportTelegramId);
     if (!user) {
       await sendMessage(chatId, '❌ Користувач не знайдений.');
       return;
@@ -4438,8 +4429,10 @@ async function showApprovalsMenu(chatId, telegramId) {
     // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
-    const role = await getUserRole(telegramId);
-    const user = await getUserInfo(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(telegramId)
+    ]);
     
     // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalsMenu: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
@@ -4493,10 +4486,11 @@ async function showApprovalVacations(chatId, telegramId) {
     
     navigationStack.pushState(telegramId, 'showApprovalsMenu', {});
     
-    const role = await getUserRole(telegramId);
-    const user = await getUserInfo(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(telegramId)
+    ]);
     
-    // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalVacations: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
     logger.info('showApprovalVacations user data', { telegramId, role, hasUser: !!user, position: user?.position, department: user?.department });
     
@@ -4717,10 +4711,11 @@ async function showApprovalRemote(chatId, telegramId) {
     
     navigationStack.pushState(telegramId, 'showApprovalsMenu', {});
     
-    const role = await getUserRole(telegramId);
-    const user = await getUserInfo(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(telegramId)
+    ]);
     
-    // Діагностика: логуємо роль та посаду для відлагодження
     console.log(`🔍 showApprovalRemote: telegramId=${telegramId}, role=${role}, position=${user?.position}, department=${user?.department}`);
     logger.info('showApprovalRemote user data', { telegramId, role, hasUser: !!user, position: user?.position, department: user?.department });
     
@@ -4853,8 +4848,10 @@ async function showHRPanel(chatId, telegramId) {
     // Зберігаємо попередній стан
     navigationStack.pushState(telegramId, 'showMainMenu', {});
     
-    const role = await getUserRole(telegramId);
-    const user = await getUserInfo(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(telegramId)
+    ]);
     
     if (role !== 'HR') {
       const diagnosticMsg = `❌ Доступ обмежено. Тільки для HR.\n\n` +
@@ -5059,8 +5056,10 @@ async function showHRSettingsMenu(chatId, telegramId) {
 // 📢 МЕНЮ РОЗСИЛОК (HR)
 async function showMailingsMenu(chatId, telegramId) {
   try {
-    const role = await getUserRole(telegramId);
-    const user = await getUserInfo(telegramId);
+    const [role, user] = await Promise.all([
+      getUserRole(telegramId),
+      getUserInfo(telegramId)
+    ]);
     
     if (role !== 'HR') {
       const diagnosticMsg = `❌ Доступ обмежено. Тільки для HR.\n\n` +
